@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Forms automation script for meeting data
-Fixed for separate date/time columns and email configuration
+Simple forms automation script - Gmail only
+Back to basics version that works reliably
 """
 
 import os
@@ -22,29 +22,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 class MeetingFormsReporter:
     def __init__(self):
-        # Email configuration with better defaults
+        # Simple email configuration - Gmail only
         self.email_user = os.getenv('EMAIL_USER')
         self.email_password = os.getenv('EMAIL_PASSWORD')
-        self.smtp_server = os.getenv('SMTP_SERVER') or self.detect_smtp_server()
-        
-        # Handle SMTP_PORT more safely
-        smtp_port_str = os.getenv('SMTP_PORT', '').strip()
-        if smtp_port_str and smtp_port_str.isdigit():
-            self.smtp_port = int(smtp_port_str)
-        else:
-            self.smtp_port = 587  # Default port
-        
-        # Handle USE_TLS safely
-        use_tls_str = os.getenv('USE_TLS', 'true').lower().strip()
-        self.use_tls = use_tls_str in ['true', 'yes', '1']
-        
         self.recipients = [email.strip() for email in os.getenv('EMAIL_RECIPIENTS', '').split(',') if email.strip()]
         
         # Google Sheets configuration
         self.sheet_id = os.getenv('GOOGLE_SHEET_ID')
         self.credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
         
-        # Column mapping for your specific data structure
+        # Column mapping for your data structure
         self.column_mapping = {
             'date': 'date',
             'time': 'time',
@@ -56,31 +43,6 @@ class MeetingFormsReporter:
             'topic': 'Topic',
             'powerapps_id': '__PowerAppsId__'
         }
-    
-    def detect_smtp_server(self):
-        """Auto-detect SMTP server based on email address"""
-        if not self.email_user:
-            return 'smtp.gmail.com'
-        
-        domain = self.email_user.split('@')[1].lower()
-        
-        smtp_map = {
-            'gmail.com': 'smtp.gmail.com',
-            'googlemail.com': 'smtp.gmail.com',
-            'outlook.com': 'smtp-mail.outlook.com',
-            'hotmail.com': 'smtp-mail.outlook.com',
-            'live.com': 'smtp-mail.outlook.com',
-            'msn.com': 'smtp-mail.outlook.com',
-            'yahoo.com': 'smtp.mail.yahoo.com',
-            'yahoo.co.uk': 'smtp.mail.yahoo.com',
-            'icloud.com': 'smtp.mail.me.com',
-            'me.com': 'smtp.mail.me.com',
-            'mac.com': 'smtp.mail.me.com'
-        }
-        
-        detected_server = smtp_map.get(domain, f'smtp.{domain}')
-        logging.info(f"📧 Auto-detected SMTP server: {detected_server} for {domain}")
-        return detected_server
     
     def connect_to_sheets(self):
         """Connect to Google Sheets"""
@@ -286,7 +248,6 @@ class MeetingFormsReporter:
     def create_email_body(self, stats):
         """Create HTML email body for meeting reports"""
         today = datetime.now().strftime('%B %d, %Y')
-        email_provider = self.email_user.split('@')[1] if self.email_user else 'Email'
         
         # Trend analysis
         today_count = stats.get('today_meetings', 0)
@@ -307,7 +268,6 @@ class MeetingFormsReporter:
                 .container {{ max-width: 600px; margin: 0 auto; background: #f5f5f5; }}
                 .header {{ background: linear-gradient(135deg, #0078d4, #00bcf2); color: white; padding: 30px 20px; text-align: center; }}
                 .header h1 {{ margin: 0; font-size: 24px; }}
-                .email-badge {{ background: rgba(255,255,255,0.2); padding: 5px 15px; border-radius: 15px; font-size: 12px; margin-top: 10px; display: inline-block; }}
                 .content {{ padding: 30px 20px; background: white; }}
                 .stats-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }}
                 .stat-card {{ background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; border: 1px solid #e9ecef; }}
@@ -325,7 +285,6 @@ class MeetingFormsReporter:
             <div class="container">
                 <div class="header">
                     <h1>📅 Meeting Analytics Report</h1>
-                    <div class="email-badge">📧 via {email_provider}</div>
                     <p>Student Meeting Tracking - {today}</p>
                 </div>
                 
@@ -376,7 +335,7 @@ class MeetingFormsReporter:
                         </tr>
                         <tr>
                             <td>Email System Status</td>
-                            <td class="success">✅ {self.smtp_server}:{self.smtp_port}</td>
+                            <td class="success">✅ Gmail SMTP Connected</td>
                         </tr>
                     </table>
                     
@@ -390,7 +349,7 @@ class MeetingFormsReporter:
                 
                 <div class="footer">
                     <p>🤖 Automated meeting analytics powered by Power Automate & Python</p>
-                    <p>Email provider: {email_provider} | SMTP: {self.smtp_server}:{self.smtp_port} | Next report: Tomorrow at 9:00 AM</p>
+                    <p>Gmail SMTP | Next report: Tomorrow at 9:00 AM</p>
                 </div>
             </div>
         </body>
@@ -400,11 +359,9 @@ class MeetingFormsReporter:
         return html_body
     
     def send_email_report(self, stats, df):
-        """Send email report"""
+        """Send email report using Gmail (simple version)"""
         try:
-            logging.info(f"📧 Preparing email report...")
-            logging.info(f"🔗 SMTP: {self.smtp_server}:{self.smtp_port}")
-            logging.info(f"👥 Recipients: {len(self.recipients)}")
+            logging.info(f"📧 Sending email via Gmail...")
             
             msg = MIMEMultipart()
             msg['From'] = self.email_user
@@ -428,7 +385,6 @@ class MeetingFormsReporter:
                     msg.attach(part)
                 
                 os.remove(csv_filename)
-                logging.info(f"📎 CSV attachment created: {csv_filename}")
             
             # Attach analytics chart
             if os.path.exists('meeting_analytics.png'):
@@ -440,15 +396,10 @@ class MeetingFormsReporter:
                     msg.attach(part)
                 
                 os.remove('meeting_analytics.png')
-                logging.info(f"📊 Chart attachment created")
             
-            # Send email
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            
-            if self.use_tls:
-                server.starttls()
-                logging.info("🔒 TLS enabled")
-            
+            # Send via Gmail (simple, standard approach)
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
             server.login(self.email_user, self.email_password)
             server.send_message(msg)
             server.quit()
@@ -458,20 +409,16 @@ class MeetingFormsReporter:
         except Exception as e:
             logging.error(f"❌ Failed to send email: {e}")
             
-            # Provide helpful error messages
-            if "authentication failed" in str(e).lower():
-                logging.error("💡 Email auth failed - check if you need an app password")
-                if "gmail" in self.smtp_server:
-                    logging.error("💡 Gmail requires app password: https://support.google.com/accounts/answer/185833")
-            elif "connection refused" in str(e).lower():
-                logging.error(f"💡 Connection failed - check SMTP server: {self.smtp_server}:{self.smtp_port}")
+            # Gmail-specific error help
+            if "authentication failed" in str(e).lower() or "username and password not accepted" in str(e).lower():
+                logging.error("💡 Gmail requires an App Password. Generate one at: https://support.google.com/accounts/answer/185833")
+            elif "auth" in str(e).lower():
+                logging.error("💡 Make sure 2-Factor Authentication is enabled and you're using an App Password")
     
     def run_daily_report(self):
         """Main function to run daily meeting report"""
         try:
             logging.info("🚀 Starting meeting analytics report...")
-            logging.info(f"📧 Email: {self.email_user}")
-            logging.info(f"🔗 SMTP: {self.smtp_server}:{self.smtp_port}")
             
             # Load data
             df = self.load_data()
