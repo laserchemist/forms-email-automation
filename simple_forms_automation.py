@@ -1,449 +1,244 @@
 #!/usr/bin/env python3
 """
-Simple Microsoft Forms Email Automation
-No API required - works with webhook data or manual exports
+Debug version of forms automation script
+Provides detailed error information
 """
 
 import os
-import smtplib
-import pandas as pd
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-import json
+import sys
 import logging
-from pathlib import Path
 
-# Configure logging
+# Set up logging first
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 
-class SimpleFormsReporter:
-    def __init__(self):
-        # Email configuration
-        self.smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
-        self.smtp_port = int(os.getenv('SMTP_PORT', '587'))
-        self.email_user = os.getenv('EMAIL_USER')
-        self.email_password = os.getenv('EMAIL_PASSWORD')
-        
-        # Recipients
-        self.recipients = self.load_recipients()
-        
-        # Sample data for demonstration
-        self.sample_data = self.create_sample_data()
+def check_environment():
+    """Check all required environment variables"""
+    required_vars = [
+        'DATA_SOURCE',
+        'EMAIL_USER', 
+        'EMAIL_PASSWORD',
+        'EMAIL_RECIPIENTS',
+        'GOOGLE_SHEET_ID',
+        'GOOGLE_CREDENTIALS_JSON'
+    ]
     
-    def load_recipients(self):
-        """Load email recipients"""
-        recipients_env = os.getenv('EMAIL_RECIPIENTS')
-        if recipients_env:
-            return [email.strip() for email in recipients_env.split(',')]
-        return ['example@email.com']
+    missing_vars = []
+    for var in required_vars:
+        value = os.getenv(var)
+        if not value:
+            missing_vars.append(var)
+        else:
+            if var == 'GOOGLE_CREDENTIALS_JSON':
+                logging.info(f"✅ {var}: Found (length: {len(value)} chars)")
+            elif var == 'EMAIL_PASSWORD':
+                logging.info(f"✅ {var}: Found (length: {len(value)} chars)")
+            else:
+                logging.info(f"✅ {var}: {value}")
     
-    def create_sample_data(self):
-        """Create sample data for demonstration"""
-        # This simulates form responses - replace with your actual data source
-        dates = pd.date_range(start='2024-08-01', end=datetime.now(), freq='D')
-        
-        sample_responses = []
-        for date in dates:
-            # Random number of responses per day (0-10)
-            num_responses = min(10, max(0, int(abs(hash(str(date)) % 10))))
-            
-            for i in range(num_responses):
-                response_time = date + timedelta(hours=hash(f"{date}{i}") % 24)
-                sample_responses.append({
-                    'Timestamp': response_time,
-                    'Question1': f'Response {i+1}',
-                    'Question2': f'Answer {i+1}',
-                    'Rating': (hash(f"{date}{i}") % 5) + 1,
-                    'Category': ['A', 'B', 'C'][hash(f"{date}{i}") % 3]
-                })
-        
-        return pd.DataFrame(sample_responses)
+    if missing_vars:
+        logging.error(f"❌ Missing required environment variables: {missing_vars}")
+        return False
     
-    def load_data_from_csv(self, csv_path):
-        """Load data from CSV file (for manual exports)"""
+    return True
+
+def check_imports():
+    """Check if all required packages can be imported"""
+    required_packages = [
+        ('pandas', 'pd'),
+        ('matplotlib.pyplot', 'plt'),
+        ('gspread', 'gspread'),
+        ('google.oauth2.service_account', 'Credentials'),
+        ('smtplib', 'smtplib'),
+        ('json', 'json')
+    ]
+    
+    for package, alias in required_packages:
         try:
-            if os.path.exists(csv_path):
-                df = pd.read_csv(csv_path)
-                df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-                return df
-        except Exception as e:
-            logging.error(f"Error loading CSV: {e}")
-        
-        return self.sample_data
+            if package == 'matplotlib.pyplot':
+                import matplotlib.pyplot as plt
+                logging.info(f"✅ {package}: imported successfully")
+            elif package == 'google.oauth2.service_account':
+                from google.oauth2.service_account import Credentials
+                logging.info(f"✅ {package}: imported successfully")
+            elif package == 'pandas':
+                import pandas as pd
+                logging.info(f"✅ {package}: imported successfully (version: {pd.__version__})")
+            else:
+                exec(f"import {package}")
+                logging.info(f"✅ {package}: imported successfully")
+        except ImportError as e:
+            logging.error(f"❌ Failed to import {package}: {e}")
+            return False
     
-    def generate_statistics(self, df):
-        """Generate summary statistics"""
-        today = datetime.now().date()
-        yesterday = today - timedelta(days=1)
-        week_ago = datetime.now() - timedelta(days=7)
+    return True
+
+def test_google_sheets_connection():
+    """Test Google Sheets connection"""
+    try:
+        import gspread
+        import json
+        from google.oauth2.service_account import Credentials
         
-        stats = {
-            'total_responses': len(df),
-            'today_responses': len(df[df['Timestamp'].dt.date == today]),
-            'yesterday_responses': len(df[df['Timestamp'].dt.date == yesterday]),
-            'this_week_responses': len(df[df['Timestamp'] >= week_ago]),
-            'avg_daily_responses': df.groupby(df['Timestamp'].dt.date).size().mean() if len(df) > 0 else 0,
-            'peak_hour': df.groupby(df['Timestamp'].dt.hour).size().idxmax() if len(df) > 0 else 'N/A',
-            'most_recent': df['Timestamp'].max() if len(df) > 0 else 'No data'
+        # Get credentials
+        creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        sheet_id = os.getenv('GOOGLE_SHEET_ID')
+        
+        if not creds_json:
+            logging.error("❌ No Google credentials found")
+            return False
+        
+        # Parse credentials
+        try:
+            creds_dict = json.loads(creds_json)
+            logging.info("✅ Google credentials JSON parsed successfully")
+        except json.JSONDecodeError as e:
+            logging.error(f"❌ Invalid JSON in Google credentials: {e}")
+            return False
+        
+        # Create credentials object
+        credentials = Credentials.from_service_account_info(
+            creds_dict,
+            scopes=['https://spreadsheets.google.com/feeds',
+                   'https://www.googleapis.com/auth/drive']
+        )
+        
+        # Authorize gspread
+        gc = gspread.authorize(credentials)
+        logging.info("✅ Google Sheets authorization successful")
+        
+        # Try to open the sheet
+        sheet = gc.open_by_key(sheet_id).sheet1
+        logging.info(f"✅ Connected to sheet: {sheet.title}")
+        
+        # Try to read data
+        values = sheet.get_all_values()
+        logging.info(f"✅ Read {len(values)} rows from sheet")
+        
+        if len(values) > 0:
+            logging.info(f"📋 Headers: {values[0]}")
+        if len(values) > 1:
+            logging.info(f"📝 Sample row: {values[1]}")
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"❌ Google Sheets connection failed: {e}")
+        return False
+
+def test_email_configuration():
+    """Test email configuration"""
+    try:
+        import smtplib
+        
+        email_user = os.getenv('EMAIL_USER')
+        email_password = os.getenv('EMAIL_PASSWORD')
+        
+        if not email_user or not email_password:
+            logging.error("❌ Email credentials missing")
+            return False
+        
+        # Detect SMTP server
+        domain = email_user.split('@')[1].lower()
+        smtp_map = {
+            'gmail.com': ('smtp.gmail.com', 587),
+            'outlook.com': ('smtp-mail.outlook.com', 587),
+            'hotmail.com': ('smtp-mail.outlook.com', 587),
+            'live.com': ('smtp-mail.outlook.com', 587),
+            'yahoo.com': ('smtp.mail.yahoo.com', 587),
+            'icloud.com': ('smtp.mail.me.com', 587)
         }
         
-        return stats
+        smtp_server, smtp_port = smtp_map.get(domain, (f'smtp.{domain}', 587))
+        
+        # Override with environment variables if provided
+        smtp_server = os.getenv('SMTP_SERVER', smtp_server)
+        smtp_port = int(os.getenv('SMTP_PORT', smtp_port))
+        
+        logging.info(f"📧 Testing email: {email_user}")
+        logging.info(f"🔗 SMTP: {smtp_server}:{smtp_port}")
+        
+        # Test SMTP connection
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(email_user, email_password)
+        server.quit()
+        
+        logging.info("✅ Email connection successful")
+        return True
+        
+    except Exception as e:
+        logging.error(f"❌ Email connection failed: {e}")
+        
+        # Provide helpful suggestions
+        if "authentication failed" in str(e).lower():
+            logging.error("💡 Suggestion: Check if you need an app password instead of regular password")
+        elif "connection refused" in str(e).lower():
+            logging.error("💡 Suggestion: Check SMTP server and port settings")
+        
+        return False
+
+def main():
+    """Main debug function"""
+    logging.info("🔍 Starting debug diagnostics...")
     
-    def create_visualizations(self, df):
-        """Create charts and save as image"""
-        plt.figure(figsize=(15, 10))
-        plt.style.use('default')
-        
-        # Daily responses over last 30 days
-        plt.subplot(2, 2, 1)
-        last_30_days = df[df['Timestamp'] >= datetime.now() - timedelta(days=30)]
-        if len(last_30_days) > 0:
-            daily_counts = last_30_days.groupby(last_30_days['Timestamp'].dt.date).size()
-            daily_counts.plot(kind='line', marker='o', color='#0078d4')
-            plt.title('Daily Responses (Last 30 Days)', fontsize=12, fontweight='bold')
-            plt.xticks(rotation=45)
-            plt.ylabel('Number of Responses')
-        else:
-            plt.text(0.5, 0.5, 'No data available', ha='center', va='center')
-            plt.title('Daily Responses - No Data')
-        
-        # Hourly distribution
-        plt.subplot(2, 2, 2)
-        if len(df) > 0:
-            hourly_counts = df.groupby(df['Timestamp'].dt.hour).size()
-            bars = plt.bar(hourly_counts.index, hourly_counts.values, color='#00bcf2')
-            plt.title('Response Distribution by Hour', fontsize=12, fontweight='bold')
-            plt.xlabel('Hour of Day')
-            plt.ylabel('Number of Responses')
-            plt.xticks(range(0, 24, 2))
-        else:
-            plt.text(0.5, 0.5, 'No data available', ha='center', va='center')
-            plt.title('Hourly Distribution - No Data')
-        
-        # Weekly pattern
-        plt.subplot(2, 2, 3)
-        if len(df) > 0:
-            df['day_of_week'] = df['Timestamp'].dt.day_name()
-            weekly_counts = df.groupby('day_of_week').size()
-            # Reorder days
-            day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            weekly_counts = weekly_counts.reindex([day for day in day_order if day in weekly_counts.index])
-            
-            bars = plt.bar(range(len(weekly_counts)), weekly_counts.values, color='#40e0d0')
-            plt.title('Response Distribution by Day of Week', fontsize=12, fontweight='bold')
-            plt.xticks(range(len(weekly_counts)), [day[:3] for day in weekly_counts.index], rotation=45)
-            plt.ylabel('Number of Responses')
-        else:
-            plt.text(0.5, 0.5, 'No data available', ha='center', va='center')
-            plt.title('Weekly Pattern - No Data')
-        
-        # Response trend (last 7 days)
-        plt.subplot(2, 2, 4)
-        recent_data = df[df['Timestamp'] >= datetime.now() - timedelta(days=7)]
-        if len(recent_data) > 0:
-            recent_daily = recent_data.groupby(recent_data['Timestamp'].dt.date).size()
-            bars = plt.bar(range(len(recent_daily)), recent_daily.values, color='#ff6b6b')
-            plt.title('Last 7 Days Responses', fontsize=12, fontweight='bold')
-            plt.xticks(range(len(recent_daily)), [d.strftime('%m/%d') for d in recent_daily.index], rotation=45)
-            plt.ylabel('Number of Responses')
-        else:
-            plt.text(0.5, 0.5, 'No data available', ha='center', va='center')
-            plt.title('Last 7 Days - No Data')
-        
-        plt.tight_layout()
-        plt.savefig('forms_report.png', dpi=300, bbox_inches='tight', facecolor='white')
-        plt.close()
-        
-        logging.info("Visualizations created successfully")
+    # Check 1: Environment variables
+    logging.info("\n📋 Step 1: Checking environment variables...")
+    env_ok = check_environment()
     
-    def create_csv_export(self, df):
-        """Create CSV export file"""
-        filename = f"forms_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        df.to_csv(filename, index=False)
-        return filename
+    # Check 2: Package imports
+    logging.info("\n📦 Step 2: Checking package imports...")
+    imports_ok = check_imports()
     
-    def create_email_body(self, stats):
-        """Create HTML email body"""
-        today = datetime.now().strftime('%B %d, %Y')
-        
-        # Determine trend emoji
-        today_count = stats.get('today_responses', 0)
-        yesterday_count = stats.get('yesterday_responses', 0)
-        
-        if today_count > yesterday_count:
-            trend = "📈 Increasing"
-        elif today_count < yesterday_count:
-            trend = "📉 Decreasing"
-        else:
-            trend = "➡️ Stable"
-        
-        html_body = f"""
-        <html>
-        <head>
-            <style>
-                body {{ 
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-                    line-height: 1.6; 
-                    color: #333;
-                    margin: 0;
-                    padding: 0;
-                }}
-                .container {{ max-width: 600px; margin: 0 auto; }}
-                .header {{ 
-                    background: linear-gradient(135deg, #0078d4, #00bcf2); 
-                    color: white; 
-                    padding: 30px 20px; 
-                    text-align: center; 
-                    border-radius: 10px 10px 0 0;
-                }}
-                .header h1 {{ margin: 0; font-size: 24px; }}
-                .header p {{ margin: 10px 0 0 0; opacity: 0.9; }}
-                .content {{ padding: 20px; background: #f8f9fa; }}
-                .stats-grid {{ 
-                    display: grid; 
-                    grid-template-columns: 1fr 1fr; 
-                    gap: 15px; 
-                    margin: 20px 0; 
-                }}
-                .stat-card {{ 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 8px; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    text-align: center;
-                }}
-                .stat-number {{ 
-                    font-size: 32px; 
-                    font-weight: bold; 
-                    color: #0078d4; 
-                    margin: 0;
-                }}
-                .stat-label {{ 
-                    color: #666; 
-                    font-size: 14px; 
-                    margin: 5px 0 0 0;
-                }}
-                .highlight {{ 
-                    background: linear-gradient(135deg, #e7f3ff, #cce7ff); 
-                    border-left: 4px solid #0078d4;
-                }}
-                .summary-table {{ 
-                    width: 100%; 
-                    border-collapse: collapse; 
-                    margin: 20px 0; 
-                    background: white;
-                    border-radius: 8px;
-                    overflow: hidden;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                }}
-                .summary-table th {{ 
-                    background: #f1f3f4; 
-                    padding: 15px; 
-                    text-align: left;
-                    font-weight: 600;
-                }}
-                .summary-table td {{ 
-                    padding: 12px 15px; 
-                    border-bottom: 1px solid #eee;
-                }}
-                .summary-table tr:last-child td {{ border-bottom: none; }}
-                .trend {{ 
-                    font-weight: bold; 
-                    padding: 5px 10px; 
-                    border-radius: 20px; 
-                    background: #e7f3ff;
-                    color: #0078d4;
-                    display: inline-block;
-                }}
-                .footer {{ 
-                    text-align: center;
-                    padding: 20px; 
-                    font-size: 12px; 
-                    color: #666; 
-                    background: #f8f9fa;
-                    border-radius: 0 0 10px 10px;
-                }}
-                .attachment-note {{
-                    background: #fff3cd;
-                    border: 1px solid #ffeaa7;
-                    border-radius: 6px;
-                    padding: 15px;
-                    margin: 20px 0;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>📊 Daily Forms Report</h1>
-                    <p>Generated on {today}</p>
-                </div>
-                
-                <div class="content">
-                    <div class="stats-grid">
-                        <div class="stat-card highlight">
-                            <div class="stat-number">{stats.get('today_responses', 0)}</div>
-                            <div class="stat-label">Responses Today</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('total_responses', 0)}</div>
-                            <div class="stat-label">Total Responses</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('this_week_responses', 0)}</div>
-                            <div class="stat-label">This Week</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('avg_daily_responses', 0):.1f}</div>
-                            <div class="stat-label">Daily Average</div>
-                        </div>
-                    </div>
-                    
-                    <table class="summary-table">
-                        <tr>
-                            <th>📈 Trend Analysis</th>
-                            <th>Value</th>
-                        </tr>
-                        <tr>
-                            <td>Daily Trend</td>
-                            <td><span class="trend">{trend}</span></td>
-                        </tr>
-                        <tr>
-                            <td>Yesterday's Responses</td>
-                            <td>{stats.get('yesterday_responses', 0)}</td>
-                        </tr>
-                        <tr>
-                            <td>Peak Response Hour</td>
-                            <td>{stats.get('peak_hour', 'N/A')}:00</td>
-                        </tr>
-                        <tr>
-                            <td>Most Recent Response</td>
-                            <td>{stats.get('most_recent', 'No data')}</td>
-                        </tr>
-                    </table>
-                    
-                    <div class="attachment-note">
-                        <strong>📎 Attachments Included:</strong><br>
-                        • Visual charts showing response trends and patterns<br>
-                        • Complete data export in CSV format for detailed analysis
-                    </div>
-                </div>
-                
-                <div class="footer">
-                    <p>🤖 This report was generated automatically by your Forms Automation System</p>
-                    <p>For questions or support, contact your system administrator</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        return html_body
+    # Check 3: Google Sheets connection
+    logging.info("\n📊 Step 3: Testing Google Sheets connection...")
+    sheets_ok = test_google_sheets_connection()
     
-    def send_email_report(self, stats, csv_filename):
-        """Send email with report and attachments"""
+    # Check 4: Email configuration
+    logging.info("\n📧 Step 4: Testing email configuration...")
+    email_ok = test_email_configuration()
+    
+    # Summary
+    logging.info("\n🎯 Summary:")
+    logging.info(f"Environment Variables: {'✅' if env_ok else '❌'}")
+    logging.info(f"Package Imports: {'✅' if imports_ok else '❌'}")
+    logging.info(f"Google Sheets: {'✅' if sheets_ok else '❌'}")
+    logging.info(f"Email Config: {'✅' if email_ok else '❌'}")
+    
+    if all([env_ok, imports_ok, sheets_ok, email_ok]):
+        logging.info("\n🎉 All checks passed! The system should work correctly.")
+        
+        # Try to run a simple report
         try:
-            msg = MIMEMultipart('alternative')
-            msg['From'] = self.email_user
-            msg['To'] = ', '.join(self.recipients)
-            msg['Subject'] = f'📊 Daily Forms Report - {datetime.now().strftime("%B %d, %Y")}'
+            logging.info("\n📊 Running simplified report...")
+            from datetime import datetime
             
-            # Add HTML body
-            html_body = self.create_email_body(stats)
-            msg.attach(MIMEText(html_body, 'html'))
+            # Simple success report
+            recipients = os.getenv('EMAIL_RECIPIENTS', '').split(',')
+            logging.info(f"✅ Debug completed successfully!")
+            logging.info(f"📧 Would send report to: {len(recipients)} recipients")
+            logging.info(f"🕐 Report time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # Attach CSV file
-            if csv_filename and os.path.exists(csv_filename):
-                with open(csv_filename, 'rb') as attachment:
-                    part = MIMEBase('application', 'octet-stream')
-                    part.set_payload(attachment.read())
-                    encoders.encode_base64(part)
-                    part.add_header(
-                        'Content-Disposition',
-                        f'attachment; filename={csv_filename}'
-                    )
-                    msg.attach(part)
-            
-            # Attach chart image
-            if os.path.exists('forms_report.png'):
-                with open('forms_report.png', 'rb') as attachment:
-                    part = MIMEBase('application', 'octet-stream')
-                    part.set_payload(attachment.read())
-                    encoders.encode_base64(part)
-                    part.add_header(
-                        'Content-Disposition',
-                        'attachment; filename=forms_report.png'
-                    )
-                    msg.attach(part)
-            
-            # Send email
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls()
-            server.login(self.email_user, self.email_password)
-            server.send_message(msg)
-            server.quit()
-            
-            logging.info(f"📧 Email report sent successfully to {len(self.recipients)} recipients")
             return True
             
         except Exception as e:
-            logging.error(f"❌ Failed to send email: {e}")
+            logging.error(f"❌ Error running simplified report: {e}")
             return False
-    
-    def run_daily_report(self):
-        """Main function to generate and send daily report"""
-        try:
-            logging.info("🚀 Starting daily report generation...")
-            
-            # Try to load data from CSV file (you can manually export and upload)
-            # For GitHub Actions, you could upload the CSV file to the repo
-            csv_file = 'forms_data.csv'  # You can upload this file manually
-            df = self.load_data_from_csv(csv_file)
-            
-            # Generate statistics
-            stats = self.generate_statistics(df)
-            logging.info(f"📊 Generated statistics for {stats['total_responses']} total responses")
-            
-            # Create visualizations
-            self.create_visualizations(df)
-            
-            # Create CSV export
-            csv_filename = self.create_csv_export(df)
-            
-            # Send email report
-            success = self.send_email_report(stats, csv_filename)
-            
-            # Clean up files
-            if csv_filename and os.path.exists(csv_filename):
-                os.remove(csv_filename)
-            if os.path.exists('forms_report.png'):
-                os.remove('forms_report.png')
-            
-            if success:
-                logging.info("✅ Daily report completed successfully!")
-            else:
-                logging.error("❌ Daily report failed to send")
-                
-        except Exception as e:
-            logging.error(f"💥 Error in daily report generation: {e}")
-
-def main():
-    """Main function"""
-    reporter = SimpleFormsReporter()
-    
-    if os.getenv('GITHUB_ACTIONS'):
-        logging.info("🤖 Running in GitHub Actions environment")
-        reporter.run_daily_report()
     else:
-        logging.info("🖥️ Running locally")
-        reporter.run_daily_report()
+        logging.error("\n❌ Some checks failed. Please fix the issues above.")
+        return False
 
 if __name__ == "__main__":
-    main()
+    try:
+        success = main()
+        exit_code = 0 if success else 1
+        logging.info(f"\n🏁 Debug completed with exit code: {exit_code}")
+        sys.exit(exit_code)
+    except Exception as e:
+        logging.error(f"💥 Unexpected error: {e}")
+        sys.exit(1)
