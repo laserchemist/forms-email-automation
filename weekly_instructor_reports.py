@@ -2,6 +2,7 @@
 """
 Configuration-based weekly instructor summary system
 Reads instructor mappings from editable config files
+Enhanced with wordcloud generation and Outlook-compatible styling
 """
 
 import os
@@ -18,6 +19,9 @@ from email.mime.base import MIMEBase
 from email import encoders
 import logging
 from pathlib import Path
+from wordcloud import WordCloud
+import re
+from collections import Counter
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -339,6 +343,69 @@ class ConfigBasedInstructorReporter:
         meetings.sort(key=lambda x: x['date'], reverse=True)
         return meetings
     
+    def create_wordcloud_from_topics(self, instructor_name, df):
+        """Create a wordcloud from meeting topics"""
+        try:
+            if df.empty:
+                return None
+            
+            topic_col = self.column_mapping['topic']
+            
+            # Extract all topics and clean them
+            topics = df[topic_col].dropna().astype(str)
+            topics = topics[topics != '']  # Remove empty strings
+            topics = topics[topics.str.lower() != 'not specified']  # Remove "not specified"
+            
+            if len(topics) == 0:
+                logging.warning(f"⚠️ No valid topics found for {instructor_name}")
+                return None
+            
+            # Combine all topics into one text
+            all_topics_text = ' '.join(topics)
+            
+            # Clean the text - remove special characters, extra spaces
+            all_topics_text = re.sub(r'[^\w\s]', ' ', all_topics_text)
+            all_topics_text = ' '.join(all_topics_text.split())  # Remove extra whitespace
+            
+            if len(all_topics_text.strip()) == 0:
+                logging.warning(f"⚠️ No text content after cleaning for {instructor_name}")
+                return None
+            
+            # Create wordcloud with professional styling
+            wordcloud = WordCloud(
+                width=800, 
+                height=400, 
+                background_color='white',
+                max_words=50,
+                colormap='viridis',
+                relative_scaling=0.5,
+                min_font_size=12,
+                max_font_size=72,
+                prefer_horizontal=0.7,
+                normalize_plurals=False
+            ).generate(all_topics_text)
+            
+            # Save wordcloud with instructor-specific filename
+            filename = f'wordcloud_{instructor_name.replace(" ", "_").replace(".", "")}.png'
+            
+            # Create the plot
+            plt.figure(figsize=(12, 6))
+            plt.imshow(wordcloud, interpolation='bilinear')
+            plt.axis('off')
+            plt.title(f'Meeting Topics - {instructor_name}', fontsize=16, fontweight='bold', pad=20)
+            plt.tight_layout(pad=1)
+            
+            # Save with high quality
+            plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+            plt.close()
+            
+            logging.info(f"✅ Created wordcloud for {instructor_name}: {filename}")
+            return filename
+            
+        except Exception as e:
+            logging.error(f"❌ Error creating wordcloud for {instructor_name}: {e}")
+            return None
+    
     def create_instructor_visualization(self, instructor_name, instructor_data, stats):
         """Create visualization for specific instructor"""
         df = instructor_data['data']
@@ -414,7 +481,7 @@ class ConfigBasedInstructorReporter:
         return filename
     
     def create_instructor_email_body(self, instructor_name, instructor_data, stats, meetings_list):
-        """Create personalized email body for instructor"""
+        """Create personalized email body for instructor with Outlook-compatible styling"""
         week_start = (datetime.now() - timedelta(days=7)).strftime('%B %d')
         week_end = datetime.now().strftime('%B %d, %Y')
         
@@ -459,23 +526,26 @@ class ConfigBasedInstructorReporter:
         # Semester info from config
         semester_info = self.config_metadata.get('semester', 'Current Semester')
         
+        # Outlook-compatible HTML with solid colors instead of gradients
         html_body = f"""
         <html>
         <head>
             <style>
                 body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #333; }}
                 .container {{ max-width: 800px; margin: 0 auto; background: #f5f5f5; }}
-                .header {{ background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 30px 20px; text-align: center; }}
+                .header {{ background: #2c3e50; color: white; padding: 30px 20px; text-align: center; }}
                 .header h1 {{ margin: 0; font-size: 24px; }}
                 .content {{ padding: 30px 20px; background: white; }}
-                .stats-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 20px 0; }}
-                .stat-card {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e9ecef; }}
+                .stats-grid {{ display: table; width: 100%; margin: 20px 0; }}
+                .stats-row {{ display: table-row; }}
+                .stat-card {{ display: table-cell; background: #f8f9fa; padding: 15px; text-align: center; border: 1px solid #e9ecef; vertical-align: middle; width: 33.33%; }}
                 .stat-number {{ font-size: 24px; font-weight: bold; color: #2c3e50; margin: 0; }}
                 .stat-label {{ color: #666; font-size: 14px; margin-top: 5px; }}
                 .section {{ margin: 30px 0; padding: 20px; border-left: 4px solid #3498db; background: #f8f9ff; }}
                 .section h3 {{ margin-top: 0; color: #2c3e50; }}
                 .footer {{ text-align: center; padding: 20px; background: #f8f9fa; color: #666; font-size: 12px; }}
                 table {{ font-size: 13px; }}
+                .attachment-note {{ background: #e8f5e8; padding: 15px; border-radius: 6px; border-left: 4px solid #27ae60; margin: 20px 0; }}
             </style>
         </head>
         <body>
@@ -488,17 +558,19 @@ class ConfigBasedInstructorReporter:
                 
                 <div class="content">
                     <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('total_meetings', 0)}</div>
-                            <div class="stat-label">Total Meetings</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('unique_students', 0)}</div>
-                            <div class="stat-label">Unique Students</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('section_count', 0)}</div>
-                            <div class="stat-label">Course Sections</div>
+                        <div class="stats-row">
+                            <div class="stat-card">
+                                <div class="stat-number">{stats.get('total_meetings', 0)}</div>
+                                <div class="stat-label">Total Meetings</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number">{stats.get('unique_students', 0)}</div>
+                                <div class="stat-label">Unique Students</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number">{stats.get('section_count', 0)}</div>
+                                <div class="stat-label">Course Sections</div>
+                            </div>
                         </div>
                     </div>
                     
@@ -520,9 +592,10 @@ class ConfigBasedInstructorReporter:
                         {meetings_html}
                     </div>
                     
-                    <div style="background: #e8f5e8; padding: 15px; border-radius: 6px; border-left: 4px solid #27ae60; margin: 20px 0;">
+                    <div class="attachment-note">
                         <strong>📎 Attachments:</strong><br>
                         • Visual analytics dashboard for your sections<br>
+                        • Meeting topics wordcloud visualization<br>
                         • Complete meeting data export (CSV format)<br>
                         • Weekly trends and student activity patterns
                     </div>
@@ -539,8 +612,8 @@ class ConfigBasedInstructorReporter:
         
         return html_body
     
-    def send_instructor_email(self, instructor_name, instructor_email, stats, meetings_list, chart_filename):
-        """Send personalized email to instructor"""
+    def send_instructor_email(self, instructor_name, instructor_email, stats, meetings_list, chart_filename, wordcloud_filename=None):
+        """Send personalized email to instructor with optional wordcloud"""
         try:
             logging.info(f"📧 Preparing email for {instructor_name} ({instructor_email})")
             
@@ -560,6 +633,15 @@ class ConfigBasedInstructorReporter:
                     part.set_payload(attachment.read())
                     encoders.encode_base64(part)
                     part.add_header('Content-Disposition', f'attachment; filename={chart_filename}')
+                    msg.attach(part)
+            
+            # Attach wordcloud if it exists
+            if wordcloud_filename and os.path.exists(wordcloud_filename):
+                with open(wordcloud_filename, 'rb') as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename={wordcloud_filename}')
                     msg.attach(part)
             
             # Create and attach CSV with instructor's data
@@ -585,10 +667,9 @@ class ConfigBasedInstructorReporter:
             logging.info(f"✅ Email sent successfully to {instructor_name}")
             
             # Clean up files
-            if chart_filename and os.path.exists(chart_filename):
-                os.remove(chart_filename)
-            if os.path.exists(csv_filename):
-                os.remove(csv_filename)
+            for filename in [chart_filename, wordcloud_filename, csv_filename]:
+                if filename and os.path.exists(filename):
+                    os.remove(filename)
             
             return True
             
@@ -640,8 +721,11 @@ class ConfigBasedInstructorReporter:
                 # Create visualization
                 chart_filename = self.create_instructor_visualization(instructor_name, instructor_data, stats)
                 
-                # Send email
-                if self.send_instructor_email(instructor_name, instructor_data['email'], stats, meetings_list, chart_filename):
+                # Create wordcloud from topics
+                wordcloud_filename = self.create_wordcloud_from_topics(instructor_name, instructor_data['data'])
+                
+                # Send email with both attachments
+                if self.send_instructor_email(instructor_name, instructor_data['email'], stats, meetings_list, chart_filename, wordcloud_filename):
                     success_count += 1
             
             logging.info(f"✅ Weekly reports completed! Sent {success_count}/{len(instructor_groups)} emails")
