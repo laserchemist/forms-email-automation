@@ -1,0 +1,56 @@
+# .github/workflows/weekly-instructor-reports.yml
+name: Weekly Instructor Reports
+
+on:
+  schedule:
+    # Run every Monday at 8:00 AM UTC
+    - cron: '0 8 * * 1'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  send-instructor-reports:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run weekly instructor reports
+      env:
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        INSTRUCTOR_EMAILS: ${{ secrets.INSTRUCTOR_EMAILS }}
+        DR_SMITH_EMAIL: ${{ secrets.DR_SMITH_EMAIL }}
+        PROF_JOHNSON_EMAIL: ${{ secrets.PROF_JOHNSON_EMAIL }}
+        DR_WILSON_EMAIL: ${{ secrets.DR_WILSON_EMAIL }}
+      run: python weekly_instructor_reports.py
+      
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: weekly-reports
+        path: |
+          *.log
+          *.png
+          *.csv
