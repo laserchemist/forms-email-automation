@@ -707,6 +707,8 @@ class ConfigBasedInstructorReporter:
                 return
             
             success_count = 0
+            week_start = (datetime.now() - timedelta(days=7)).strftime('%B %d')
+            week_end = datetime.now().strftime('%B %d, %Y')
             
             # Process each instructor
             for instructor_name, instructor_data in instructor_groups.items():
@@ -728,7 +730,16 @@ class ConfigBasedInstructorReporter:
                 if self.send_instructor_email(instructor_name, instructor_data['email'], stats, meetings_list, chart_filename, wordcloud_filename):
                     success_count += 1
             
-            logging.info(f"✅ Weekly reports completed! Sent {success_count}/{len(instructor_groups)} emails")
+            # Send administrator summary email
+            logging.info("📊 Preparing administrator summary...")
+            admin_stats = self.create_admin_summary_statistics(instructor_groups, weekly_df)
+            admin_sent = self.send_admin_summary_email(admin_stats, week_start, week_end)
+            
+            if admin_sent:
+                logging.info(f"✅ Weekly reports completed! Sent {success_count}/{len(instructor_groups)} instructor emails + admin summary")
+            else:
+                logging.info(f"✅ Weekly reports completed! Sent {success_count}/{len(instructor_groups)} instructor emails (admin summary failed)")
+            
             
         except Exception as e:
             logging.error(f"💥 Error in weekly report generation: {e}")
