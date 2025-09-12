@@ -550,7 +550,7 @@ class ConfigBasedInstructorReporter:
             msg['Subject'] = f'📚 Weekly Meeting Summary - {instructor_name} - Week of {datetime.now().strftime("%B %d, %Y")}'
             
             # Create email body
-            html_body = self.create_instructor_email_body(instructor_name, {}, stats, meetings_list)
+            html_body = self.create_instructor_email_body(instructor_name, instructor_data, stats, meetings_list)
             msg.attach(MIMEText(html_body, 'html'))
             
             # Attach chart if it exists
