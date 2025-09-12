@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""
+Weekly instructor summary system
+Sends personalized emails to each instructor with their students' meeting data
+"""
+
+import os
+import gspread
+import json
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
+from google.oauth2.service_account import Credentials
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import logging
+from collections import defaultdict
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class WeeklyInstructorReporter:
+    def __init__(self):
+        # Email configuration
+        self.email_user = os.getenv('EMAIL_USER')
+        self.email_password = os.getenv('EMAIL_PASSWORD')
+        
+        # Google Sheets configuration
+        self.sheet_id = os.getenv('GOOGLE_SHEET_ID')
+        self.credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        
+        # Instructor email mapping (we'll try to detect from data first)
+        self.instructor_emails = self.load_instructor_emails()
+        
+        # Column mapping
+        self.column_mapping = {
+            'date': 'date',
+            'time': 'time',
+            'first_name': 'Student First Name',
+            'last_name': 'Student Last Name', 
+            'course': 'Course Section',
+            'meeting_person': 'Meeting person',
+            'meeting_type': 'Meeting Type',
+            'topic': 'Topic',
+            'powerapps_id': '__PowerAppsId__'
+        }
+    
+    def load_instructor_emails(self):
+        """Load instructor email mappings from environment or create defaults"""
+        # Try to load from environment variable (JSON format)
+        instructor_json = os.getenv('INSTRUCTOR_EMAILS')
+        if instructor_json:
+            try:
+                return json.loads(instructor_json)
+            except:
+                logging.warning("Invalid INSTRUCTOR_EMAILS JSON format")
+        
+        # Default mapping - you can customize this
+        return {
+            'Dr. Smith': os.getenv('DR_SMITH_EMAIL', 'dr.smith@university.edu'),
+            'Prof. Johnson': os.getenv('PROF_JOHNSON_EMAIL', 'prof.johnson@university.edu'),
+            'Dr. Wilson': os.getenv('DR_WILSON_EMAIL', 'dr.wilson@university.edu')
+        }
+    
+    def connect_to_sheets(self):
+        """Connect to Google Sheets"""
+        try:
+            if not self.credentials_json:
+                logging.error("No Google credentials found")
+                return None
+            
+            creds_dict = json.loads(self.credentials_json)
+            credentials = Credentials.from_service_account_info(
+                creds_dict,
+                scopes=['https://spreadsheets.google.com/feeds',
+                       'https://www.googleapis.com/auth/drive']
+            )
+            
+            gc = gspread.authorize(credentials)
+            sheet = gc.open_by_key(self.sheet_id).sheet1
+            
+            logging.info(f"✅ Connected to sheet: {sheet.title}")
+            return sheet
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to connect to Google Sheets: {e}")
+            return None
+    
+    def load_data(self):
+        """Load data from Google Sheets"""
+        sheet = self.connect_to_sheets()
+        if not sheet:
+            return None
+        
+        try:
+            values = sheet.get_all_values()
+            
+            if len(values) < 2:
+                logging.warning("Sheet has no data rows")
+                return pd.DataFrame()
+            
+            # Create DataFrame
+            df = pd.DataFrame(values[1:], columns=values[0])
+            
+            # Combine date and time columns into datetime
+            date_col = self.column_mapping['date']
+            time_col = self.column_mapping['time']
+            
+            if date_col in df.columns and time_col in df.columns:
+                df['datetime'] = df[date_col] + ' ' + df[time_col]
+                df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+                df = df.dropna(subset=['datetime'])
+            elif date_col in df.columns:
+                df['datetime'] = pd.to_datetime(df[date_col], errors='coerce')
+                df = df.dropna(subset=['datetime'])
+            
+            # Remove completely empty rows
+            df = df.dropna(how='all')
+            
+            logging.info(f"📊 Loaded {len(df)} meeting records")
+            return df
+            
+        except Exception as e:
+            logging.error(f"❌ Error loading data: {e}")
+            return None
+    
+    def get_weekly_data(self, df):
+        """Filter data for the past week"""
+        if df is None or df.empty:
+            return df
+        
+        # Get last 7 days
+        week_ago = datetime.now() - timedelta(days=7)
+        weekly_df = df[df['datetime'] >= week_ago].copy()
+        
+        logging.info(f"📅 Weekly data: {len(weekly_df)} meetings in the last 7 days")
+        return weekly_df
+    
+    def group_by_instructor(self, df):
+        """Group meetings by instructor/meeting person"""
+        if df is None or df.empty:
+            return {}
+        
+        meeting_person_col = self.column_mapping['meeting_person']
+        course_col = self.column_mapping['course']
+        
+        instructor_groups = {}
+        
+        for instructor in df[meeting_person_col].unique():
+            if pd.isna(instructor) or instructor == '':
+                continue
+                
+            instructor_data = df[df[meeting_person_col] == instructor].copy()
+            
+            instructor_groups[instructor] = {
+                'data': instructor_data,
+                'courses': instructor_data[course_col].unique().tolist(),
+                'total_meetings': len(instructor_data),
+                'unique_students': len(instructor_data.groupby([
+                    self.column_mapping['first_name'], 
+                    self.column_mapping['last_name']
+                ]))
+            }
+        
+        logging.info(f"👨‍🏫 Found {len(instructor_groups)} instructors with meetings")
+        return instructor_groups
+    
+    def generate_instructor_statistics(self, instructor_data):
+        """Generate statistics for a specific instructor"""
+        df = instructor_data['data']
+        
+        if df.empty:
+            return {}
+        
+        # Basic stats
+        stats = {
+            'total_meetings': len(df),
+            'unique_students': instructor_data['unique_students'],
+            'courses': instructor_data['courses'],
+            'course_count': len(instructor_data['courses'])
+        }
+        
+        # Meeting type breakdown
+        meeting_type_col = self.column_mapping['meeting_type']
+        if meeting_type_col in df.columns:
+            meeting_types = df[meeting_type_col].value_counts().to_dict()
+            stats['meeting_types'] = meeting_types
+        else:
+            stats['meeting_types'] = {}
+        
+        # Daily breakdown
+        daily_counts = df.groupby(df['datetime'].dt.date).size()
+        stats['daily_counts'] = daily_counts.to_dict()
+        stats['busiest_day'] = daily_counts.idxmax() if len(daily_counts) > 0 else 'N/A'
+        stats['avg_daily'] = daily_counts.mean() if len(daily_counts) > 0 else 0
+        
+        # Student meeting frequency
+        student_counts = df.groupby([
+            self.column_mapping['first_name'], 
+            self.column_mapping['last_name']
+        ]).size().sort_values(ascending=False)
+        stats['top_students'] = student_counts.head(5).to_dict()
+        
+        return stats
+    
+    def create_student_meeting_list(self, df):
+        """Create a detailed list of student meetings"""
+        if df.empty:
+            return []
+        
+        meetings = []
+        for _, row in df.iterrows():
+            meeting = {
+                'student_name': f"{row[self.column_mapping['first_name']]} {row[self.column_mapping['last_name']]}",
+                'course': row[self.column_mapping['course']],
+                'date': row['datetime'].strftime('%Y-%m-%d'),
+                'time': row['datetime'].strftime('%I:%M %p'),
+                'meeting_type': row[self.column_mapping['meeting_type']],
+                'topic': row[self.column_mapping['topic']] if row[self.column_mapping['topic']] else 'Not specified'
+            }
+            meetings.append(meeting)
+        
+        # Sort by date (most recent first)
+        meetings.sort(key=lambda x: x['date'], reverse=True)
+        return meetings
+    
+    def create_instructor_visualization(self, instructor_name, instructor_data, stats):
+        """Create visualization for specific instructor"""
+        df = instructor_data['data']
+        
+        if df.empty:
+            return None
+        
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        fig.suptitle(f'Weekly Meeting Summary - {instructor_name}', fontsize=14, fontweight='bold')
+        
+        # Daily meetings this week
+        daily_counts = pd.Series(stats['daily_counts'])
+        if len(daily_counts) > 0:
+            daily_counts.plot(kind='bar', ax=axes[0,0], color='#0078d4')
+            axes[0,0].set_title('Daily Meetings This Week')
+            axes[0,0].set_xlabel('Date')
+            axes[0,0].set_ylabel('Number of Meetings')
+            axes[0,0].tick_params(axis='x', rotation=45)
+        else:
+            axes[0,0].text(0.5, 0.5, 'No meetings this week', ha='center', va='center')
+            axes[0,0].set_title('Daily Meetings - No Data')
+        
+        # Meeting types
+        meeting_types = stats.get('meeting_types', {})
+        if meeting_types:
+            pd.Series(meeting_types).plot(kind='pie', ax=axes[0,1], autopct='%1.1f%%')
+            axes[0,1].set_title('Meeting Types Distribution')
+            axes[0,1].set_ylabel('')
+        else:
+            axes[0,1].text(0.5, 0.5, 'No meeting type data', ha='center', va='center')
+            axes[0,1].set_title('Meeting Types - No Data')
+        
+        # Course sections
+        course_counts = df[self.column_mapping['course']].value_counts()
+        if len(course_counts) > 0:
+            course_counts.plot(kind='bar', ax=axes[1,0], color='#00bcf2')
+            axes[1,0].set_title('Meetings by Course Section')
+            axes[1,0].set_xlabel('Course Section')
+            axes[1,0].set_ylabel('Number of Meetings')
+            axes[1,0].tick_params(axis='x', rotation=45)
+        else:
+            axes[1,0].text(0.5, 0.5, 'No course data', ha='center', va='center')
+            axes[1,0].set_title('Course Sections - No Data')
+        
+        # Top students (meeting frequency)
+        top_students = stats.get('top_students', {})
+        if top_students:
+            # Convert the tuple keys to readable names
+            student_names = [f"{name[0]} {name[1]}" for name in top_students.keys()]
+            meeting_counts = list(top_students.values())
+            
+            axes[1,1].bar(range(len(student_names)), meeting_counts, color='#40e0d0')
+            axes[1,1].set_title('Most Active Students')
+            axes[1,1].set_xlabel('Students')
+            axes[1,1].set_ylabel('Number of Meetings')
+            axes[1,1].set_xticks(range(len(student_names)))
+            axes[1,1].set_xticklabels([name.split()[0] for name in student_names], rotation=45)
+        else:
+            axes[1,1].text(0.5, 0.5, 'No student data', ha='center', va='center')
+            axes[1,1].set_title('Student Activity - No Data')
+        
+        plt.tight_layout()
+        
+        # Save with instructor-specific filename
+        filename = f'weekly_report_{instructor_name.replace(" ", "_").replace(".", "")}.png'
+        plt.savefig(filename, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        return filename
+    
+    def create_instructor_email_body(self, instructor_name, stats, meetings_list):
+        """Create personalized email body for instructor"""
+        week_start = (datetime.now() - timedelta(days=7)).strftime('%B %d')
+        week_end = datetime.now().strftime('%B %d, %Y')
+        
+        # Create student meetings table
+        meetings_html = ""
+        if meetings_list:
+            meetings_html = "<table style='width: 100%; border-collapse: collapse; margin: 10px 0;'>"
+            meetings_html += "<tr style='background: #f1f3f4;'><th style='padding: 8px; border: 1px solid #ddd;'>Student</th><th style='padding: 8px; border: 1px solid #ddd;'>Course</th><th style='padding: 8px; border: 1px solid #ddd;'>Date</th><th style='padding: 8px; border: 1px solid #ddd;'>Time</th><th style='padding: 8px; border: 1px solid #ddd;'>Type</th><th style='padding: 8px; border: 1px solid #ddd;'>Topic</th></tr>"
+            
+            for meeting in meetings_list[:15]:  # Limit to 15 most recent
+                meetings_html += f"<tr><td style='padding: 8px; border: 1px solid #ddd;'>{meeting['student_name']}</td><td style='padding: 8px; border: 1px solid #ddd;'>{meeting['course']}</td><td style='padding: 8px; border: 1px solid #ddd;'>{meeting['date']}</td><td style='padding: 8px; border: 1px solid #ddd;'>{meeting['time']}</td><td style='padding: 8px; border: 1px solid #ddd;'>{meeting['meeting_type']}</td><td style='padding: 8px; border: 1px solid #ddd;'>{meeting['topic']}</td></tr>"
+            
+            meetings_html += "</table>"
+            
+            if len(meetings_list) > 15:
+                meetings_html += f"<p style='font-style: italic; color: #666;'>Showing 15 most recent meetings. Total: {len(meetings_list)} meetings this week.</p>"
+        else:
+            meetings_html = "<p>No meetings recorded this week.</p>"
+        
+        # Meeting type summary
+        meeting_types_html = ""
+        meeting_types = stats.get('meeting_types', {})
+        if meeting_types:
+            meeting_types_html = "<ul>"
+            for meeting_type, count in meeting_types.items():
+                meeting_types_html += f"<li><strong>{meeting_type}:</strong> {count} meetings</li>"
+            meeting_types_html += "</ul>"
+        else:
+            meeting_types_html = "<p>No meeting type data available.</p>"
+        
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #333; }}
+                .container {{ max-width: 800px; margin: 0 auto; background: #f5f5f5; }}
+                .header {{ background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 30px 20px; text-align: center; }}
+                .header h1 {{ margin: 0; font-size: 24px; }}
+                .content {{ padding: 30px 20px; background: white; }}
+                .stats-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 20px 0; }}
+                .stat-card {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e9ecef; }}
+                .stat-number {{ font-size: 24px; font-weight: bold; color: #2c3e50; margin: 0; }}
+                .stat-label {{ color: #666; font-size: 14px; margin-top: 5px; }}
+                .section {{ margin: 30px 0; padding: 20px; border-left: 4px solid #3498db; background: #f8f9ff; }}
+                .section h3 {{ margin-top: 0; color: #2c3e50; }}
+                .footer {{ text-align: center; padding: 20px; background: #f8f9fa; color: #666; font-size: 12px; }}
+                table {{ font-size: 13px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📚 Weekly Meeting Summary</h1>
+                    <p><strong>{instructor_name}</strong></p>
+                    <p>Week of {week_start} - {week_end}</p>
+                </div>
+                
+                <div class="content">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-number">{stats.get('total_meetings', 0)}</div>
+                            <div class="stat-label">Total Meetings</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{stats.get('unique_students', 0)}</div>
+                            <div class="stat-label">Unique Students</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{stats.get('course_count', 0)}</div>
+                            <div class="stat-label">Course Sections</div>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
+                        <h3>📋 Course Sections</h3>
+                        <p><strong>Your sections:</strong> {', '.join(stats.get('courses', []))}</p>
+                        <p><strong>Busiest day:</strong> {stats.get('busiest_day', 'N/A')}</p>
+                        <p><strong>Average daily meetings:</strong> {stats.get('avg_daily', 0):.1f}</p>
+                    </div>
+                    
+                    <div class="section">
+                        <h3>📊 Meeting Types This Week</h3>
+                        {meeting_types_html}
+                    </div>
+                    
+                    <div class="section">
+                        <h3>👥 Student Meeting Details</h3>
+                        {meetings_html}
+                    </div>
+                    
+                    <div style="background: #e8f5e8; padding: 15px; border-radius: 6px; border-left: 4px solid #27ae60; margin: 20px 0;">
+                        <strong>📎 Attachments:</strong><br>
+                        • Visual analytics dashboard for your sections<br>
+                        • Complete meeting data export (CSV format)<br>
+                        • Weekly trends and student activity patterns
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>🤖 Automated weekly summary | Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</p>
+                    <p>Questions about this report? Contact your system administrator.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return html_body
+    
+    def send_instructor_email(self, instructor_name, instructor_email, stats, meetings_list, chart_filename):
+        """Send personalized email to instructor"""
+        try:
+            logging.info(f"📧 Preparing email for {instructor_name} ({instructor_email})")
+            
+            msg = MIMEMultipart()
+            msg['From'] = self.email_user
+            msg['To'] = instructor_email
+            msg['Subject'] = f'📚 Weekly Meeting Summary - {instructor_name} - Week of {datetime.now().strftime("%B %d, %Y")}'
+            
+            # Create email body
+            html_body = self.create_instructor_email_body(instructor_name, stats, meetings_list)
+            msg.attach(MIMEText(html_body, 'html'))
+            
+            # Attach chart if it exists
+            if chart_filename and os.path.exists(chart_filename):
+                with open(chart_filename, 'rb') as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename={chart_filename}')
+                    msg.attach(part)
+            
+            # Create and attach CSV with instructor's data
+            csv_filename = f"meetings_{instructor_name.replace(' ', '_').replace('.', '')}_{datetime.now().strftime('%Y%m%d')}.csv"
+            if meetings_list:
+                df_meetings = pd.DataFrame(meetings_list)
+                df_meetings.to_csv(csv_filename, index=False)
+                
+                with open(csv_filename, 'rb') as attachment:
+                    part = MIMEBase('application', 'octet-stream')
+                    part.set_payload(attachment.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename={csv_filename}')
+                    msg.attach(part)
+            
+            # Send email
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(self.email_user, self.email_password)
+            server.send_message(msg)
+            server.quit()
+            
+            logging.info(f"✅ Email sent successfully to {instructor_name}")
+            
+            # Clean up files
+            if chart_filename and os.path.exists(chart_filename):
+                os.remove(chart_filename)
+            if os.path.exists(csv_filename):
+                os.remove(csv_filename)
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to send email to {instructor_name}: {e}")
+            return False
+    
+    def run_weekly_report(self):
+        """Main function to run weekly instructor reports"""
+        try:
+            logging.info("🚀 Starting weekly instructor reports...")
+            
+            # Load data
+            df = self.load_data()
+            if df is None:
+                logging.error("❌ Failed to load data")
+                return
+            
+            # Get weekly data
+            weekly_df = self.get_weekly_data(df)
+            if weekly_df.empty:
+                logging.warning("⚠️ No meetings in the past week")
+                return
+            
+            # Group by instructor
+            instructor_groups = self.group_by_instructor(weekly_df)
+            if not instructor_groups:
+                logging.warning("⚠️ No instructors found in data")
+                return
+            
+            success_count = 0
+            
+            # Process each instructor
+            for instructor_name, instructor_data in instructor_groups.items():
+                logging.info(f"👨‍🏫 Processing {instructor_name}...")
+                
+                # Get instructor email
+                instructor_email = self.instructor_emails.get(instructor_name)
+                if not instructor_email:
+                    logging.warning(f"⚠️ No email found for {instructor_name}, skipping...")
+                    continue
+                
+                # Generate statistics
+                stats = self.generate_instructor_statistics(instructor_data)
+                
+                # Create student meeting list
+                meetings_list = self.create_student_meeting_list(instructor_data['data'])
+                
+                # Create visualization
+                chart_filename = self.create_instructor_visualization(instructor_name, instructor_data, stats)
+                
+                # Send email
+                if self.send_instructor_email(instructor_name, instructor_email, stats, meetings_list, chart_filename):
+                    success_count += 1
+            
+            logging.info(f"✅ Weekly reports completed! Sent {success_count}/{len(instructor_groups)} emails")
+            
+        except Exception as e:
+            logging.error(f"💥 Error in weekly report generation: {e}")
+
+def main():
+    reporter = WeeklyInstructorReporter()
+    
+    if os.getenv('GITHUB_ACTIONS'):
+        logging.info("🤖 Running weekly reports in GitHub Actions")
+        reporter.run_weekly_report()
+    else:
+        logging.info("🖥️ Running weekly reports locally")
+        reporter.run_weekly_report()
+
+if __name__ == "__main__":
+    main()
