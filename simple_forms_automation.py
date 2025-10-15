@@ -64,59 +64,106 @@ class MeetingFormsReporter:
             logging.error(f"❌ Failed to connect to Google Sheets: {e}")
             return None
     
-    def load_data(self):
-        """Load ALL data from Google Sheets"""
-        sheet = self.connect_to_sheets()
-        if not sheet:
-            return None
-        
-        try:
-            values = sheet.get_all_values()
-            
-            if len(values) < 2:
-                logging.warning("Sheet has no data rows")
-                return pd.DataFrame()
-            
-            df = pd.DataFrame(values[1:], columns=values[0])
-            logging.info(f"📊 Loaded {len(df)} total rows from sheet")
-            
-            # Combine date and time columns
-            date_col = self.column_mapping['date']
-            time_col = self.column_mapping['time']
-            
-            if date_col in df.columns and time_col in df.columns:
-                df['datetime'] = pd.to_datetime(df[date_col] + ' ' + df[time_col], errors='coerce')
-            elif date_col in df.columns:
-                df['datetime'] = pd.to_datetime(df[date_col], errors='coerce')
-            else:
-                logging.error("No date column found!")
-                return pd.DataFrame()
-            
-            # Check how many dates parsed successfully
-            valid_dates = df['datetime'].notna().sum()
-            logging.info(f"📅 Successfully parsed {valid_dates}/{len(df)} dates")
-            
-            if valid_dates == 0:
-                logging.error("❌ No valid dates parsed! Check date format in sheet")
-                logging.info(f"Sample date values: {df[date_col].head().tolist()}")
-                return pd.DataFrame()
-            
-            # Remove rows with invalid dates
-            df = df.dropna(subset=['datetime'])
-            df = df.dropna(how='all')
-            
-            # Show date range
-            if len(df) > 0:
-                logging.info(f"📆 Date range: {df['datetime'].min()} to {df['datetime'].max()}")
-            
-            return df
-            
-        except Exception as e:
-            logging.error(f"❌ Error loading data: {e}")
-            import traceback
-            logging.error(traceback.format_exc())
-            return None
+def load_data(self):
+    """Load ALL data from Google Sheets with enhanced debugging"""
+    sheet = self.connect_to_sheets()
+    if not sheet:
+        return None
     
+    try:
+        values = sheet.get_all_values()
+        
+        if len(values) < 2:
+            logging.warning("Sheet has no data rows")
+            return pd.DataFrame()
+        
+        # Create DataFrame
+        df = pd.DataFrame(values[1:], columns=values[0])
+        logging.info(f"📊 Loaded {len(df)} total rows from sheet")
+        logging.info(f"📋 Columns found: {df.columns.tolist()}")
+        
+        # Get column names
+        date_col = self.column_mapping['date']
+        time_col = self.column_mapping['time']
+        
+        # Check if columns exist
+        if date_col not in df.columns:
+            logging.error(f"❌ Date column '{date_col}' not found! Available: {df.columns.tolist()}")
+            return pd.DataFrame()
+        
+        if time_col not in df.columns:
+            logging.error(f"❌ Time column '{time_col}' not found! Available: {df.columns.tolist()}")
+            return pd.DataFrame()
+        
+        # Clean the data - strip whitespace
+        df[date_col] = df[date_col].astype(str).str.strip()
+        df[time_col] = df[time_col].astype(str).str.strip()
+        
+        # Remove empty rows (where date is empty or 'nan')
+        df = df[df[date_col].str.len() > 0]
+        df = df[~df[date_col].isin(['', 'nan', 'None', 'NaN'])]
+        
+        logging.info(f"📊 After filtering empty dates: {len(df)} rows")
+        
+        # Show sample of what we're trying to parse
+        logging.info(f"📅 Sample dates: {df[date_col].head(3).tolist()}")
+        logging.info(f"⏰ Sample times: {df[time_col].head(3).tolist()}")
+        
+        # Try to parse datetime
+        # Handle cases where time might be empty
+        df['date_time_str'] = df[date_col] + ' ' + df[time_col].replace('', '00:00')
+        df['datetime'] = pd.to_datetime(df['date_time_str'], format='%m/%d/%Y %H:%M', errors='coerce')
+        
+        # Alternative: try without specifying format
+        null_mask = df['datetime'].isna()
+        if null_mask.sum() > 0:
+            logging.info(f"⚠️ Retrying {null_mask.sum()} failed parses with flexible format")
+            df.loc[null_mask, 'datetime'] = pd.to_datetime(
+                df.loc[null_mask, 'date_time_str'], 
+                errors='coerce'
+            )
+        
+        # Check parsing results
+        valid_dates = df['datetime'].notna().sum()
+        invalid_dates = df['datetime'].isna().sum()
+        
+        logging.info(f"📅 Successfully parsed {valid_dates}/{len(df)} dates")
+        
+        if invalid_dates > 0:
+            logging.warning(f"⚠️ Failed to parse {invalid_dates} dates")
+            # Show examples of failed parses
+            failed_examples = df[df['datetime'].isna()][['date_time_str']].head(5)
+            logging.warning(f"Failed examples:\n{failed_examples}")
+        
+        if valid_dates == 0:
+            logging.error("❌ No valid dates parsed! Check date format in sheet")
+            logging.error(f"Sample date values: {df[date_col].head().tolist()}")
+            logging.error(f"Sample time values: {df[time_col].head().tolist()}")
+            return pd.DataFrame()
+        
+        # Remove rows with invalid dates
+        df = df.dropna(subset=['datetime'])
+        
+        # Remove completely empty rows
+        df = df.dropna(how='all')
+        
+        # Drop the temporary column
+        df = df.drop('date_time_str', axis=1)
+        
+        # Show date range
+        if len(df) > 0:
+            logging.info(f"📆 Date range: {df['datetime'].min()} to {df['datetime'].max()}")
+            logging.info(f"✅ Successfully loaded {len(df)} meetings")
+        
+        return df
+        
+    except Exception as e:
+        logging.error(f"❌ Error loading data: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return None
+        
+            
     def generate_statistics(self, df):
         """Generate comprehensive meeting statistics"""
         if df is None or df.empty:
