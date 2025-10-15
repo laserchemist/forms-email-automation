@@ -341,7 +341,7 @@ class MeetingFormsReporter:
             <style>
                 body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #333; }}
                 .container {{ max-width: 700px; margin: 0 auto; background: #f5f5f5; }}
-                .header {{ background: linear-gradient(135deg, #0078d4, #00bcf2); color: white; padding: 30px 20px; text-align: center; }}
+                .header {{ background: linear-gradient(135deg, #4a90e2, #357abd); color: white; padding: 30px 20px; text-align: center; }}
                 .header h1 {{ margin: 0; font-size: 24px; }}
                 .content {{ padding: 30px 20px; background: white; }}
                 .stats-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }}

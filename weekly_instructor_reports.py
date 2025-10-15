@@ -114,7 +114,7 @@ class EnhancedInstructorReporter:
             return None
     
     def load_data(self):
-        """Load ALL semester data from Google Sheets"""
+        """Load ALL semester data from Google Sheets with enhanced debugging"""
         sheet = self.connect_to_sheets()
         if not sheet:
             return None
@@ -126,27 +126,74 @@ class EnhancedInstructorReporter:
                 logging.warning("Sheet has no data rows")
                 return pd.DataFrame()
             
+            # Create DataFrame
             df = pd.DataFrame(values[1:], columns=values[0])
-            logging.info(f"📊 Loaded {len(df)} total rows")
+            logging.info(f"📊 Loaded {len(df)} total rows from sheet")
             
+            # Get column names
             date_col = self.column_mapping['date']
             time_col = self.column_mapping['time']
             
-            if date_col in df.columns and time_col in df.columns:
-                df['datetime'] = pd.to_datetime(df[date_col] + ' ' + df[time_col], errors='coerce')
-            elif date_col in df.columns:
-                df['datetime'] = pd.to_datetime(df[date_col], errors='coerce')
+            # Check if columns exist
+            if date_col not in df.columns:
+                logging.error(f"❌ Date column '{date_col}' not found! Available: {df.columns.tolist()}")
+                return pd.DataFrame()
             
+            if time_col not in df.columns:
+                logging.error(f"❌ Time column '{time_col}' not found! Available: {df.columns.tolist()}")
+                return pd.DataFrame()
+            
+            # Clean the data - strip whitespace
+            df[date_col] = df[date_col].astype(str).str.strip()
+            df[time_col] = df[time_col].astype(str).str.strip()
+            
+            # Remove empty rows (where date is empty or 'nan')
+            df = df[df[date_col].str.len() > 0]
+            df = df[~df[date_col].isin(['', 'nan', 'None', 'NaN'])]
+            
+            logging.info(f"📊 After filtering empty dates: {len(df)} rows")
+            
+            # Try to parse datetime
+            df['date_time_str'] = df[date_col] + ' ' + df[time_col].replace('', '00:00')
+            df['datetime'] = pd.to_datetime(df['date_time_str'], format='%m/%d/%Y %H:%M', errors='coerce')
+            
+            # Alternative: try without specifying format
+            null_mask = df['datetime'].isna()
+            if null_mask.sum() > 0:
+                logging.info(f"⚠️ Retrying {null_mask.sum()} failed parses with flexible format")
+                df.loc[null_mask, 'datetime'] = pd.to_datetime(
+                    df.loc[null_mask, 'date_time_str'], 
+                    errors='coerce'
+                )
+            
+            # Check parsing results
+            valid_dates = df['datetime'].notna().sum()
+            invalid_dates = df['datetime'].isna().sum()
+            
+            logging.info(f"📅 Successfully parsed {valid_dates}/{len(df)} dates")
+            
+            if invalid_dates > 0:
+                logging.warning(f"⚠️ Failed to parse {invalid_dates} dates")
+            
+            if valid_dates == 0:
+                logging.error("❌ No valid dates parsed! Check date format in sheet")
+                return pd.DataFrame()
+            
+            # Remove rows with invalid dates
             df = df.dropna(subset=['datetime'])
             df = df.dropna(how='all')
+            df = df.drop('date_time_str', axis=1)
             
             if len(df) > 0:
-                logging.info(f"📅 Date range: {df['datetime'].min()} to {df['datetime'].max()}")
+                logging.info(f"📆 Date range: {df['datetime'].min()} to {df['datetime'].max()}")
+                logging.info(f"✅ Successfully loaded {len(df)} meetings")
             
             return df
             
         except Exception as e:
             logging.error(f"❌ Error loading data: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
             return None
     
     def get_weekly_data(self, df):
@@ -450,7 +497,8 @@ class EnhancedInstructorReporter:
             <style>
                 body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #333; }}
                 .container {{ max-width: 800px; margin: 0 auto; background: #f5f5f5; }}
-                .header {{ background: #2c3e50; color: white; padding: 30px 20px; text-align: center; }}
+                .header {{ background: linear-gradient(135deg, #4a90e2, #357abd); color: white; padding: 30px 20px; text-align: center; }}
+                .header h1 {{ margin: 0; font-size: 24px; }}
                 .content {{ padding: 30px 20px; background: white; }}
                 .stats-grid {{ display: table; width: 100%; margin: 20px 0; }}
                 .stats-row {{ display: table-row; }}
@@ -522,7 +570,7 @@ class EnhancedInstructorReporter:
                     </div>
                     
                     <div style="background: #e8f5e8; padding: 15px; border-radius: 6px; border-left: 4px solid #27ae60; margin: 20px 0;">
-                        <strong>📎 Attachments:</strong><br>
+                        <strong>🔎 Attachments:</strong><br>
                         • Semester-wide analytics dashboard<br>
                         • Meeting topics wordcloud<br>
                         • Section attendance breakdown<br>
