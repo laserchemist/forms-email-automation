@@ -361,7 +361,7 @@ class MeetingFormsReporter:
             <div class="container">
                 <div class="header">
                     <h1>📅 Daily Meeting Analytics</h1>
-                    <p>Student Meeting Tracking - {today}</p>
+                    <p>Student Meeting Tracking (your section(s))- {today}</p>
                 </div>
                 
                 <div class="content">

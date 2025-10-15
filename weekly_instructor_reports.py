@@ -515,6 +515,7 @@ class EnhancedInstructorReporter:
                 <div class="header">
                     <h1>📚 Weekly Meeting Report</h1>
                     <p><strong>{instructor_name}</strong></p>
+                    <p>Students from your section(s)</p>
                     <p>{stats.get('course_name', 'N/A')} | Week of {week_start} - {week_end}</p>
                 </div>
                 
