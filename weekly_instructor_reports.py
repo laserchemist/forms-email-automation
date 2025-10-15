@@ -497,7 +497,7 @@ class EnhancedInstructorReporter:
             <style>
                 body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #333; }}
                 .container {{ max-width: 800px; margin: 0 auto; background: #f5f5f5; }}
-                .header {{ background: linear-gradient(135deg, #4a90e2, #357abd); color: white; padding: 30px 20px; text-align: center; }}
+               .header {{ background: #2c5282; color: #dc2626; padding: 30px 20px; text-align: center; }}
                 .header h1 {{ margin: 0; font-size: 24px; }}
                 .content {{ padding: 30px 20px; background: white; }}
                 .stats-grid {{ display: table; width: 100%; margin: 20px 0; }}
