@@ -1,8 +1,8 @@
 course_section,instructor_name,email,course_name,active,notes
-T/R 9:30 AM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,true,CONFIRM instructor + email
-T/R 11:00 AM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,true,CONFIRM instructor + email
-T/R 3:30 PM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,true,CONFIRM instructor + email
-T/R 5:30 PM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,true,CONFIRM instructor + email
-M/W 5:30 PM,Dr. Han,jun.han@temple.edu,Elements of Data Science,true,carried over from Spring - CONFIRM
-MWF 12:00 PM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,true,CONFIRM instructor + email
-Honors T/R 9:30,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,true,CONFIRM instructor + email
+T/R 9:30 AM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,TRUE,CONFIRM instructor + email
+T/R 11:00 AM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,TRUE,CONFIRM instructor + email
+T/R 3:30 PM,Dr. Smith,jonathan.m.smith@temple.edu,Elements of Data Science,TRUE,CONFIRM instructor + email
+T/R 5:30 PM,Dr. Kazi,kazi.tawhid@temple.edu,Elements of Data Science,TRUE,CONFIRM instructor + email
+M/W 5:30 PM,Dr. Han,jun.han@temple.edu,Elements of Data Science,TRUE,carried over from Spring - CONFIRM
+MWF 12:00 PM,Dr. Kazi,kazi.tawhid@temple.edu,Elements of Data Science,TRUE,CONFIRM instructor + email
+Honors T/R 9:30,Dr. Nyquist,jonathan.nyquist@temple.edu,Elements of Data Science,TRUE,CONFIRM instructor + email

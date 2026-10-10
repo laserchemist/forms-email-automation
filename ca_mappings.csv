@@ -1,6 +1,11 @@
 form_name,ca_name,email,active,notes
-Zachary,Zachary,,true,form_name must match the "Who are you meeting with" choice exactly (case ignored). Add email.
-Mohammad,Mohammad,,true,add email
-Soul,Soul,,true,add email
-Vincent,Vincent,,true,add email
-Corey,Corey,,true,not yet on the form - add the choice to the Microsoft Form
+Mathew,Matthew,tus27107@temple.edu,TRUE,"form_name must match the ""Who are you meeting with"" choice exactly (case ignored). Add email."
+Zachary,Zachary,tum94656@temple.edu,TRUE,
+Jeni,Jeni,tur49074@temple.edu,TRUE,
+Angel,Angel,tuv13340@temple.edu,TRUE,
+Vincent,Vincent,tuq72840@temple.edu,TRUE,
+Mohammad,Mohammad,tur49237@temple.edu,TRUE,
+Tyler Baughman,Tyler,tuq08643@temple.edu,TRUE,
+Aditya Rao,Aditya,tus42453@temple.edu,TRUE,
+Soul Moreno,Soul,tur78858@temple.edu,TRUE,
+Corey Renman,Corey,tuj22656@temple.edu,TRUE,
