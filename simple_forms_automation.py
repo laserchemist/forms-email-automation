@@ -9,6 +9,7 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -19,6 +20,11 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+def now_et():
+    """Sheet times are Eastern; GitHub runners are UTC."""
+    return datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+
+
 class MeetingFormsReporter:
     def __init__(self):
         self.email_user = os.getenv('EMAIL_USER')
@@ -28,6 +34,10 @@ class MeetingFormsReporter:
         self.sheet_id = os.getenv('GOOGLE_SHEET_ID')
         self.credentials_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
         
+        self.semester_start = pd.Timestamp(os.getenv('SEMESTER_START') or '2026-08-24')
+        # optional: "test jon|smith" style first|last pairs to ignore, comma separated
+        self.exclude = [x.strip().lower() for x in os.getenv('EXCLUDE_STUDENTS', '').split(',') if x.strip()]
+
         self.column_mapping = {
             'date': 'date',
             'time': 'time',
@@ -120,7 +130,7 @@ class MeetingFormsReporter:
                 logging.info(f"⚠️ Retrying {null_mask.sum()} failed parses with flexible format")
                 df.loc[null_mask, 'datetime'] = pd.to_datetime(
                     df.loc[null_mask, 'date_time_str'], 
-                    errors='coerce'
+                    format='mixed', errors='coerce'
                 )
             
             # Check parsing results
@@ -146,6 +156,16 @@ class MeetingFormsReporter:
             
             # Remove completely empty rows
             df = df.dropna(how='all')
+
+            # Only this semester
+            df = df[df['datetime'] >= self.semester_start]
+            if self.exclude:
+                key = (df[self.column_mapping['first_name']].str.strip().str.lower() + '|' +
+                       df[self.column_mapping['last_name']].str.strip().str.lower())
+                df = df[~key.isin(self.exclude)]
+            if df.empty:
+                logging.warning("No meetings on/after semester start")
+                return pd.DataFrame()
             
             # Drop the temporary column
             df = df.drop('date_time_str', axis=1)
@@ -184,9 +204,9 @@ class MeetingFormsReporter:
                 'days_active': 0
             }
         
-        today = datetime.now().date()
+        today = now_et().date()
         yesterday = today - timedelta(days=1)
-        week_ago = datetime.now() - timedelta(days=7)
+        week_ago = now_et() - timedelta(days=7)
         
         # Semester-wide stats
         semester_start = df['datetime'].min()
@@ -261,7 +281,7 @@ class MeetingFormsReporter:
         fig.suptitle('Meeting Analytics Dashboard - All Semester', fontsize=16, fontweight='bold')
         
         # 1. Last 7 days trend
-        week_ago = datetime.now() - timedelta(days=7)
+        week_ago = now_et() - timedelta(days=7)
         last_week = df[df['datetime'] >= week_ago]
         if len(last_week) > 0:
             daily_counts = last_week.groupby(last_week['datetime'].dt.date).size()
@@ -313,7 +333,7 @@ class MeetingFormsReporter:
     
     def create_email_body(self, stats):
         """Create enhanced HTML email body with semester statistics"""
-        today = datetime.now().strftime('%B %d, %Y')
+        today = now_et().strftime('%B %d, %Y')
         
         # Trend analysis
         today_count = stats.get('today_meetings', 0)
@@ -341,7 +361,7 @@ class MeetingFormsReporter:
             <style>
                 body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; color: #333; }}
                 .container {{ max-width: 700px; margin: 0 auto; background: #f5f5f5; }}
-                .header {{ background: #2c5282; color: #dc2626; padding: 30px 20px; text-align: center; }}
+                .header {{ background: #2c5282; color: #ffffff; padding: 30px 20px; text-align: center; }}
                 .header h1 {{ margin: 0; font-size: 24px; }}
                 .content {{ padding: 30px 20px; background: white; }}
                 .stats-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }}
@@ -361,41 +381,31 @@ class MeetingFormsReporter:
             <div class="container">
                 <div class="header">
                     <h1>📅 Daily Meeting Analytics</h1>
-                    <p>Student Meeting Tracking (your section(s))- {today}</p>
+                    <p>Student Meeting Tracking – all sections – {today}</p>
                 </div>
                 
                 <div class="content">
                     <div class="semester-section">
                         <h3 style="margin: 0 0 10px 0;">🎓 Semester Overview</h3>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                            <div><strong>Total Meetings:</strong> {stats.get('semester_total', 0)}</div>
-                            <div><strong>Unique Students:</strong> {stats.get('unique_students', 0)}</div>
-                            <div><strong>Semester Start:</strong> {stats.get('semester_start', 'N/A')}</div>
-                            <div><strong>Days Active:</strong> {stats.get('days_active', 0)}</div>
-                            <div><strong>Avg/Day:</strong> {stats.get('avg_daily_meetings', 0):.1f}</div>
-                            <div><strong>Avg/Week:</strong> {stats.get('avg_weekly_meetings', 0):.1f}</div>
-                        </div>
+                        <table width="100%" cellspacing="0" cellpadding="4" style="font-size:14px;">
+                            <tr><td><strong>Total Meetings:</strong> {stats.get('semester_total', 0)}</td>
+                                <td><strong>Unique Students:</strong> {stats.get('unique_students', 0)}</td></tr>
+                            <tr><td><strong>First Meeting:</strong> {stats.get('semester_start', 'N/A')}</td>
+                                <td><strong>Days Active:</strong> {stats.get('days_active', 0)}</td></tr>
+                            <tr><td><strong>Avg/Day:</strong> {stats.get('avg_daily_meetings', 0):.1f}</td>
+                                <td><strong>Avg/Week:</strong> {stats.get('avg_weekly_meetings', 0):.1f}</td></tr>
+                        </table>
                     </div>
                     
-                    <div class="stats-grid">
-                        <div class="stat-card highlight">
-                            <div class="stat-number">{stats.get('today_meetings', 0)}</div>
-                            <div class="stat-label">Meetings Today</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('last_7_days', 0)}</div>
-                            <div class="stat-label">Last 7 Days</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{stats.get('active_courses', 0)}</div>
-                            <div class="stat-label">Active Sections</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">{trend}</div>
-                            <div class="stat-label">Trend</div>
-                        </div>
-                    </div>
-                    
+                    <table width="100%" cellspacing="6" cellpadding="0" style="border-collapse:separate;">
+                        <tr>
+                            <td width="25%" align="center" style="background:#e7f3ff;padding:14px;border:1px solid #e9ecef;"><div style="font-size:26px;font-weight:bold;color:#0078d4;">{stats.get('today_meetings', 0)}</div><div style="color:#666;font-size:13px;">Meetings Today</div></td>
+                            <td width="25%" align="center" style="background:#f8f9fa;padding:14px;border:1px solid #e9ecef;"><div style="font-size:26px;font-weight:bold;color:#0078d4;">{stats.get('last_7_days', 0)}</div><div style="color:#666;font-size:13px;">Last 7 Days</div></td>
+                            <td width="25%" align="center" style="background:#f8f9fa;padding:14px;border:1px solid #e9ecef;"><div style="font-size:26px;font-weight:bold;color:#0078d4;">{stats.get('active_courses', 0)}</div><div style="color:#666;font-size:13px;">Active Sections</div></td>
+                            <td width="25%" align="center" style="background:#f8f9fa;padding:14px;border:1px solid #e9ecef;"><div style="font-size:18px;font-weight:bold;color:#0078d4;">{trend}</div><div style="color:#666;font-size:13px;">Trend</div></td>
+                        </tr>
+                    </table>
+
                     <div class="section">
                         <h3 style="margin: 0 0 10px 0;">📊 Course Section Attendance</h3>
                         {course_breakdown_html}
@@ -429,7 +439,7 @@ class MeetingFormsReporter:
                 </div>
                 
                 <div class="footer">
-                    <p>🤖 Automated daily report | Generated {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</p>
+                    <p>🤖 Automated daily report | Generated {now_et().strftime('%B %d, %Y at %I:%M %p')}</p>
                 </div>
             </div>
         </body>
@@ -446,14 +456,14 @@ class MeetingFormsReporter:
             msg = MIMEMultipart()
             msg['From'] = self.email_user
             msg['To'] = ', '.join(self.recipients)
-            msg['Subject'] = f'📅 Daily Meeting Analytics - {stats.get("semester_total", 0)} Total Meetings - {datetime.now().strftime("%B %d, %Y")}'
+            msg['Subject'] = f'📅 Daily Meeting Analytics - {stats.get("semester_total", 0)} Total Meetings - {now_et().strftime("%B %d, %Y")}'
             
             html_body = self.create_email_body(stats)
             msg.attach(MIMEText(html_body, 'html'))
             
             # Attach CSV
             if df is not None and not df.empty:
-                csv_filename = f"meeting_data_{datetime.now().strftime('%Y%m%d')}.csv"
+                csv_filename = f"meeting_data_{now_et().strftime('%Y%m%d')}.csv"
                 df.to_csv(csv_filename, index=False)
                 
                 with open(csv_filename, 'rb') as attachment:

@@ -1,0 +1,6 @@
+form_name,ca_name,email,active,notes
+Zachary,Zachary,,true,form_name must match the "Who are you meeting with" choice exactly (case ignored). Add email.
+Mohammad,Mohammad,,true,add email
+Soul,Soul,,true,add email
+Vincent,Vincent,,true,add email
+Corey,Corey,,true,not yet on the form - add the choice to the Microsoft Form
