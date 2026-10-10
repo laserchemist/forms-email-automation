@@ -1,0 +1,34 @@
+name: TEST Weekly Reports (all emails to me)
+
+# Manual only. Builds every weekly email (each instructor, each CA, admin summary)
+# but delivers ALL of them to TEST_RECIPIENT. Subject lines say who would really get it.
+on:
+  workflow_dispatch:
+
+jobs:
+  test-weekly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Send all weekly emails to the test recipient
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          SEMESTER_START: ${{ vars.SEMESTER_START || '2026-08-24' }}
+          MEETING_FORM_URL: ${{ vars.MEETING_FORM_URL || 'https://forms.cloud.microsoft/r/5zNSiU70si?origin=QRCode' }}
+          TEST_RECIPIENT: jonathan.m.smith@temple.edu
+          ADMIN_EMAIL: jonathan.m.smith@temple.edu
+          SEND_INSTRUCTORS: 'true'
+          SEND_CAS: 'true'
+          DRY_RUN: 'false'
+        run: python weekly_instructor_reports.py
