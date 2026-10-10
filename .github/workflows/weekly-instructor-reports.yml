@@ -1,56 +1,48 @@
-# .github/workflows/weekly-instructor-reports.yml
-name: Weekly Instructor Reports
+name: Weekly Meeting Reports
 
 on:
   schedule:
-    # Run every Monday at 8:00 AM UTC
-    - cron: '0 8 * * 1'
-  workflow_dispatch:  # Allow manual triggering
+    - cron: '0 11 * * 1'        # Mondays 11:00 UTC = 7:00 AM Eastern (6:00 AM in winter)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build reports, send nothing)'
+        type: boolean
+        default: true
+      send_instructors:
+        description: 'Send instructor emails'
+        type: boolean
+        default: true
+      send_cas:
+        description: 'Send CA emails'
+        type: boolean
+        default: true
 
 jobs:
-  send-instructor-reports:
+  weekly-reports:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.9'
-        
-    - name: Cache pip dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-          
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-    - name: Run weekly instructor reports
-      env:
-        EMAIL_USER: ${{ secrets.EMAIL_USER }}
-        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-        GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-        INSTRUCTOR_EMAILS: ${{ secrets.INSTRUCTOR_EMAILS }}
-        DR_SMITH_EMAIL: ${{ secrets.DR_SMITH_EMAIL }}
-        PROF_JOHNSON_EMAIL: ${{ secrets.PROF_JOHNSON_EMAIL }}
-        DR_WILSON_EMAIL: ${{ secrets.DR_WILSON_EMAIL }}
-      run: python weekly_instructor_reports.py
-      
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: weekly-reports
-        path: |
-          *.log
-          *.png
-          *.csv
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - run: pip install -r requirements.txt
+
+      - name: Run weekly reports
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}   # -> 1P8-e_bM6sOjyiJf9Q3ESnQSVPYiReGJDLU7Kcbd6ddU
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}               # optional; defaults to EMAIL_USER
+          SEMESTER_START: ${{ vars.SEMESTER_START || '2026-08-24' }}
+          MEETING_FORM_URL: ${{ vars.MEETING_FORM_URL || 'https://forms.cloud.microsoft/r/5zNSiU70si?origin=QRCode' }}
+          SEND_INSTRUCTORS: ${{ github.event_name == 'schedule' && 'true' || inputs.send_instructors }}
+          SEND_CAS: ${{ github.event_name == 'schedule' && 'true' || inputs.send_cas }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+        run: python weekly_instructor_reports.py
+
+      # No artifact upload on purpose: previews/CSVs contain student names and this repo may be public.
