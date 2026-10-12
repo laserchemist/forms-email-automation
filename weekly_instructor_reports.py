@@ -19,6 +19,7 @@ Configuration (environment variables)
   MEETING_FORM_URL               link shown with the QR code
   SEND_INSTRUCTORS / SEND_CAS    "false" to skip that audience        (default true)
   DRY_RUN                        "true" -> write HTML previews to ./preview, send nothing
+  TEST_RECIPIENT                 send every email to this address only (subject shows the real recipient)
 
 CLI:  python weekly_instructor_reports.py [--dry-run] [--csv local_file.csv]
 
@@ -100,6 +101,8 @@ class Reporter:
         self.sheet_id = os.getenv("GOOGLE_SHEET_ID")
         self.creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
         self.admin_email = os.getenv("ADMIN_EMAIL") or self.email_user
+        # TEST_RECIPIENT: every email goes here instead, subject tagged with the real recipient
+        self.test_to = (os.getenv("TEST_RECIPIENT") or "").strip()
         self.form_url = os.getenv("MEETING_FORM_URL") or DEFAULT_FORM_URL
         self.semester_start = pd.Timestamp(os.getenv("SEMESTER_START") or "2026-08-24")
         self.dry_run = dry_run or env_flag("DRY_RUN", False)
@@ -565,6 +568,9 @@ material – please do not share it outside the teaching team.</p>"""
     def send(self, to, subject, html, images=None, attachments=None, tag="msg"):
         """images: {cid: png_bytes}; attachments: [(filename, bytes)]"""
         images, attachments = images or {}, attachments or []
+        if self.test_to:
+            subject = f"[TEST – would go to {to or '(no email on file)'}] {subject}"
+            to = self.test_to
         if self.dry_run:
             out = HERE / "preview"
             out.mkdir(exist_ok=True)
@@ -639,7 +645,7 @@ material – please do not share it outside the teaching team.</p>"""
         if env_flag("SEND_INSTRUCTORS", True):
             groups = {}
             for sec, info in self.instructors.items():
-                if not info["email"]:
+                if not info["email"] and not self.test_to:
                     problems.append(f"No email for instructor of section “{sec}”")
                     continue
                 g = groups.setdefault(info["email"], {"name": info["instructor"], "course": info["course_name"], "sections": []})
@@ -664,7 +670,7 @@ material – please do not share it outside the teaching team.</p>"""
         # ---- CAs
         if env_flag("SEND_CAS", True):
             for key, ca in self.cas.items():
-                if not ca["email"]:
+                if not ca["email"] and not self.test_to:
                     problems.append(f"CA “{ca['name']}” has no email in ca_mappings.csv – skipped")
                     continue
                 html, mine, mine_wk, sm = self.build_ca(ca, df, s_all)
