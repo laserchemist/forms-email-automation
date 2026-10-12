@@ -1,11 +1,11 @@
-form_name,ca_name,email,active,notes
-Mathew,Matthew,tus27107@temple.edu,TRUE,"form_name must match the ""Who are you meeting with"" choice exactly (case ignored). Add email."
-Zachary,Zachary,tum94656@temple.edu,TRUE,
-Jeni,Jeni,tur49074@temple.edu,TRUE,
-Angel,Angel,tuv13340@temple.edu,TRUE,
-Vincent,Vincent,tuq72840@temple.edu,TRUE,
-Mohammad,Mohammad,tur49237@temple.edu,TRUE,
-Tyler Baughman,Tyler,tuq08643@temple.edu,TRUE,
-Aditya Rao,Aditya,tus42453@temple.edu,TRUE,
-Soul Moreno,Soul,tur78858@temple.edu,TRUE,
-Corey Renman,Corey,tuj22656@temple.edu,TRUE,
+form_name,ca_name,email,active
+Mathew|Matthew,Mathew,tus27107@temple.edu,TRUE
+Zachary,Zachary,tum94656@temple.edu,TRUE
+Jeni,Jeni,tur49074@temple.edu,TRUE
+Angel,Angel,tuv13340@temple.edu,TRUE
+Vincent,Vincent,tuq72840@temple.edu,TRUE
+Mohammad,Mohammad,tur49237@temple.edu,TRUE
+Tyler Baughman|Tyler,Tyler,tuq08643@temple.edu,TRUE
+Aditya Rao|Aditya,Aditya,tus42453@temple.edu,TRUE
+Soul|Soul Moreno,Soul,tur78858@temple.edu,TRUE
+Corey Renman|Corey,Corey,tuj22656@temple.edu,TRUE
