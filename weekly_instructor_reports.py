@@ -144,10 +144,13 @@ class Reporter:
         for _, r in df.iterrows():
             if not truthy(r.get("active"), True):
                 continue
-            key = norm(r.get("form_name", "")).lower()
-            if key:
-                out[key] = {"form_name": norm(r["form_name"]),
-                            "name": norm(r.get("ca_name", "")) or norm(r["form_name"]),
+            # form_name may list several spellings: "Soul|Soul Moreno"
+            aliases = [norm(a) for a in str(r.get("form_name", "")).split("|") if norm(a)]
+            if aliases:
+                key = aliases[0].lower()
+                out[key] = {"form_name": aliases[0],
+                            "aliases": {a.lower() for a in aliases},
+                            "name": norm(r.get("ca_name", "")) or aliases[0],
                             "email": norm(r.get("email", ""))}
         log.info("Loaded %d active CAs", len(out))
         return out
@@ -354,7 +357,7 @@ class Reporter:
         bp = all_df.groupby("person").size().sort_values().tail(8)
         wp = self_wp = all_df[all_df["datetime"] >= self.week_start].groupby("person").size().reindex(bp.index, fill_value=0)
         y = list(range(len(bp)))
-        colors = [ORANGE if p.lower() == ca["form_name"].lower() else NAVY for p in bp.index]
+        colors = [ORANGE if p.lower() in ca["aliases"] else NAVY for p in bp.index]
         ax[1, 0].barh([i + 0.2 for i in y], bp.values, height=0.4, color=colors)
         ax[1, 0].barh([i - 0.2 for i in y], wp.values, height=0.4, color=TEAL)
         ax[1, 0].set_yticks(y)
@@ -478,7 +481,7 @@ use only – please do not forward.</p>"""
 
     # ----------------------------------------------------------------------- CA email
     def build_ca(self, ca, all_df, s_all):
-        mine = all_df[all_df["person"].str.lower() == ca["form_name"].lower()]
+        mine = all_df[all_df["person"].str.lower().isin(ca["aliases"])]
         mine_wk = self.in_week(mine)
         sm = self.summarize(mine, mine_wk)
         team_rank = s_all["by_person"].index.tolist()
@@ -516,8 +519,9 @@ use only – please do not forward.</p>"""
 </td></tr></table>"""
 
         rank_txt = ""
-        if ca["form_name"] in team_rank:
-            rank_txt = f" You are #{team_rank.index(ca['form_name']) + 1} of {len(team_rank)} people on the log."
+        mine_names = [p for p in team_rank if p.lower() in ca["aliases"]]
+        if mine_names:
+            rank_txt = f" You are #{team_rank.index(mine_names[0]) + 1} of {len(team_rank)} people on the log."
 
         inner = f"""
 <p style="margin-top:0;">Hi {escape(ca['name'])} – thank you for the time you put in with students. Here is how the
@@ -549,7 +553,7 @@ material – please do not share it outside the teaching team.</p>"""
                              int((sd["datetime"] >= self.week_start).sum()), sd["student"].nunique()])
         ca_rows = []
         for key, ca in self.cas.items():
-            m = all_df[all_df["person"].str.lower() == key]
+            m = all_df[all_df["person"].str.lower().isin(ca["aliases"])]
             ca_rows.append([ca["name"], ca["email"] or "NO EMAIL", int((m["datetime"] >= self.week_start).sum()), len(m)])
         prob = "".join(f"<li>{escape(p)}</li>" for p in problems) or "<li>None 🎉</li>"
         sent_html = "".join(f"<li>{escape(x)}</li>" for x in sent) or "<li>nothing sent</li>"
@@ -636,7 +640,7 @@ material – please do not share it outside the teaching team.</p>"""
             if sec:
                 problems.append(f"Section “{sec}” has no instructor in instructor_mappings.csv "
                                 f"({int((df['section'] == sec).sum())} meetings)")
-        known = set(self.cas)
+        known = set().union(*[c["aliases"] for c in self.cas.values()]) if self.cas else set()
         for p in sorted(set(df["person"])):
             if p and p.lower() not in known and not re.match(r"^(dr|prof)\.?\s", p, re.I):
                 problems.append(f"Meeting person “{p}” is not in ca_mappings.csv (add them or fix the form)")
