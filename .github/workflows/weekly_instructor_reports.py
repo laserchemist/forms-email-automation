@@ -689,13 +689,21 @@ material – please do not share it outside the teaching team.</p>"""
                     problems.append(f"Email to CA {ca['name']} failed")
 
         # ---- admin (last, so it can report everything above)
+        admin_ok = True
         if self.admin_email:
             html = self.build_admin(df, s_all, sent, problems)
-            self.send(self.admin_email, f"Weekly report summary – {len(sent)} sent, {len(problems)} issue(s)",
-                      html, tag="admin_summary")
+            admin_ok = self.send(self.admin_email,
+                                 f"Weekly report summary – {len(sent)} sent, {len(problems)} issue(s)",
+                                 html, tag="admin_summary")
         log.info("Done. %d emails, %d issues", len(sent), len(problems))
         for p in problems:
             log.warning("Issue: %s", p)           # no student names are logged
+
+        # Non-zero exit turns the GitHub Actions run red, so GitHub emails you about it.
+        failed = sum(x.endswith("(FAILED)") for x in sent) + (0 if admin_ok else 1)
+        if failed:
+            log.error("%d email(s) failed to send", failed)
+            return 1
         return 0
 
 
