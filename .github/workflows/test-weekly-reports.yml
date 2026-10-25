@@ -22,7 +22,11 @@ jobs:
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          # Data source: repo variable MEETINGS_SOURCE = email | xlsx | sheet  (default: sheet)
+          MEETINGS_SOURCE: ${{ vars.MEETINGS_SOURCE || 'sheet' }}
+          EXCLUDE_STUDENTS: ${{ vars.EXCLUDE_STUDENTS || 'jonathan|smith,test jon|smith,test jonathan|smith' }}
+          MEETINGS_XLSX_URL: ${{ secrets.MEETINGS_XLSX_URL }}   # only for MEETINGS_SOURCE=xlsx
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}          # fallback only; used when no XLSX URL
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SEMESTER_START: ${{ vars.SEMESTER_START || '2026-08-24' }}
           MEETING_FORM_URL: ${{ vars.MEETING_FORM_URL || 'https://forms.cloud.microsoft/r/5zNSiU70si?origin=QRCode' }}
