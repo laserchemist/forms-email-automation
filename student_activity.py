@@ -57,6 +57,19 @@ EMAIL_DOMAIN = "@temple.edu"
 MATCH_HIGH, MATCH_ACCEPT = 90, 75
 SHEET_TAB = "Weekly activity"
 
+# Canvas section -> class-time label exactly as on the meetings form (and as the
+# course_section values in instructor_mappings.csv). Used when master_roster.csv
+# has no Class Time. Sections not listed here are learned each run from visits
+# whose student name matches the roster exactly (see fill_class_times). Override
+# without editing code via env SECTION_CLASS_TIMES='{"001": "T/R 9:30 AM", ...}'.
+SECTION_CLASS_TIMES = {
+    "004": "T/R 5:30 PM",
+    "005": "M/W 5:30 PM",
+    "007": "MWF 12:00 PM",
+    "SCTC-1913-001": "Honors T/R 9:30",
+}
+TEST_STUDENTS = {"student, test", "test student", "test, student"}
+
 MEET = {"date": "date", "time": "time", "first": "Student First Name",
         "last": "Student Last Name", "section": "Course Section"}
 TEST_NAME = re.compile(r"\btest\b", re.I)
@@ -179,7 +192,8 @@ def load_roster():
         "name":       col("student", "name", "student name"),
         "section":    col("section").str.replace("Section: ", "", regex=False),
         "class_time": col("class time"),
-    })[login != ""].drop_duplicates("user").reset_index(drop=True)
+    })[login != ""]
+    df = df[~df["name"].str.lower().isin(TEST_STUDENTS)].drop_duplicates("user").reset_index(drop=True)
     if df.empty:
         expected = ["Student", "SIS Login ID", "Section", "Class Time"]
         present = [e for e in expected if e.lower() in by_lower]
@@ -284,6 +298,49 @@ def match_visits(meet, roster):
     return meet
 
 
+def fill_class_times(roster, meet):
+    """
+    Give every roster student a class time (the form's section label), in order:
+      1. SECTION_CLASS_TIMES (code or env)                         source 'set'
+      2. Class Time already in master_roster.csv                   source 'roster'
+      3. learned: the label most students in that Canvas section   source 'learned'
+         picked on the form (exact/high name matches, >= 2 students, >= 60%)
+    Returns (roster, {section: (label, source, n_students_seen)}).
+    """
+    roster = roster.copy()
+    explicit = dict(SECTION_CLASS_TIMES)
+    try:
+        explicit.update(json.loads(os.getenv("SECTION_CLASS_TIMES") or "{}"))
+    except ValueError:
+        log.warning("SECTION_CLASS_TIMES env is not valid JSON — ignored")
+
+    learned = {}
+    if len(meet):
+        blank = roster.assign(class_time="")          # name-only match, no section bias
+        m = match_visits(meet, blank)
+        good = m[m["match_quality"].isin(["exact", "high"])].drop_duplicates(["user", "label"])
+        good = good.assign(section=good["user"].map(dict(zip(roster["user"], roster["section"]))))
+        for sec, labels in good.groupby("section")["label"]:
+            top = labels.value_counts()
+            if top.iloc[0] >= 2 and top.iloc[0] / top.sum() >= 0.6:
+                learned[sec] = (top.index[0], int(top.sum()))
+
+    info = {}
+    for sec in sorted(roster["section"].unique()):
+        have = roster.loc[roster["section"] == sec, "class_time"]
+        have = have[have != ""]
+        if sec in explicit:
+            info[sec] = (explicit[sec], "set", None)
+        elif len(have):
+            info[sec] = (have.mode().iloc[0], "roster", None)
+        elif sec in learned:
+            info[sec] = (learned[sec][0], "learned", learned[sec][1])
+        else:
+            info[sec] = ("", "unknown", None)
+        roster.loc[roster["section"] == sec, "class_time"] = info[sec][0]
+    return roster, info
+
+
 def _aware(ts):
     ts = pd.Timestamp(ts).to_pydatetime()
     return ts if ts.tzinfo else ts.replace(tzinfo=ET)
@@ -300,16 +357,18 @@ def load_week_activity(meetings, week_start, now):
     problems = []
     roster = load_roster()
     if roster.empty:
-        return {"roster": roster, "visits": pd.DataFrame(), "hub": None,
+        return {"roster": roster, "visits": pd.DataFrame(), "hub": None, "class_times": {},
                 "problems": [f"Hub activity skipped: no master roster ({ROSTER_DIAG})"]}
-    no_ct = int((roster["class_time"] == "").sum())
-    if no_ct:
-        problems.append(f"{no_ct} roster student(s) have no Class Time in master_roster.csv — "
-                        f"they are left out of instructors' hub-activity blocks")
+    allm = pd.DataFrame({"first": meetings[MEET["first"]], "last": meetings[MEET["last"]],
+                         "label": meetings[MEET["section"]], "datetime": meetings["datetime"]})
+    allm = allm[~(allm["first"] + " " + allm["last"]).str.contains(TEST_NAME)]
+    roster, class_times = fill_class_times(roster, allm)
+    unknown = [s for s, (lab, src, _) in class_times.items() if src == "unknown"]
+    if unknown:
+        problems.append(f"No class time known for section(s) {unknown} — add them to SECTION_CLASS_TIMES "
+                        f"in student_activity.py; their students are left out of instructor emails")
 
-    m = meetings[(meetings["datetime"] >= week_start) & (meetings["datetime"] <= now)]
-    m = pd.DataFrame({"first": m[MEET["first"]], "last": m[MEET["last"]],
-                      "label": m[MEET["section"]], "datetime": m["datetime"]})
+    m = allm[(allm["datetime"] >= week_start) & (allm["datetime"] <= now)]
     visits = match_visits(m, roster)
     n_none = int((visits["match_quality"] == "none").sum()) if len(visits) else 0
     if n_none:
@@ -321,7 +380,8 @@ def load_week_activity(meetings, week_start, now):
         hub = hw.hours_between(_aware(week_start), _aware(now), os.getenv("HUB_NAMESPACE") or None)
     except hw.HubQueryError as e:
         problems.append(f"Hub hours unavailable this week: {e}")
-    return {"roster": roster, "visits": visits, "hub": hub, "problems": problems}
+    return {"roster": roster, "visits": visits, "hub": hub, "problems": problems,
+            "class_times": class_times}
 
 
 def instructor_block(rep, act, sections):
@@ -455,6 +515,9 @@ def main():
     if roster.empty:
         sys.exit(f"No master roster: {ROSTER_DIAG}")
     meet = load_meetings(a.meetings_csv)
+    roster, class_times = fill_class_times(roster, meet)
+    for sec, (lab, src, n) in class_times.items():
+        log.info("Section %s -> class time %r (%s%s)", sec, lab, src, f", {n} students" if n else "")
     visits = match_visits(meet, roster)
     q = visits["match_quality"].value_counts().to_dict()
     log.info("Roster %d students; %d meetings this semester; matches %s", len(roster), len(meet), q)

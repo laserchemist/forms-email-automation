@@ -604,10 +604,20 @@ material – please do not share it outside the teaching team.</p>"""
             on_hub = sum(1 for u in roster["user"] if hub and hub.get(u, 0) > 0) if hub is not None else "–"
             v = act["visits"]
             matched = int((v["match_quality"] != "none").sum()) if len(v) else 0
+            ct_rows = []
+            for sec, (label, src, n) in act.get("class_times", {}).items():
+                inst = self.instructors.get(label, {}).get("instructor", "NOT MAPPED") if label else "–"
+                how = {"set": "set in student_activity.py", "roster": "master roster",
+                       "learned": f"learned from {n} students' form answers", "unknown": "UNKNOWN"}[src]
+                ct_rows.append([sec, label or "–", how, int((roster["section"] == sec).sum()), inst])
             hub_html = (f"<h3 style='color:{NAVY};'>JupyterHub activity (last 7 days)</h3>"
                         + self._cards([(len(roster), "Roster students", NAVY),
                                        (on_hub, "On the hub this week", GREEN),
-                                       (f"{matched}/{len(v)}", "Visits matched to roster", BLUE)]))
+                                       (f"{matched}/{len(v)}", "Visits matched to roster", BLUE)])
+                        + "<p style='font-size:13px;margin:10px 0 0;'><b>Canvas section → form class time</b> "
+                          "(how students are routed to instructors — please check):</p>"
+                        + self._table(["Canvas section", "Class time", "Source", "Students", "Instructor"],
+                                      ct_rows))
 
         inner = f"""
 {self._cards([(s_all['week_total'], 'Meetings this week', GREEN), (s_all['total'], 'Semester meetings', NAVY),
@@ -686,6 +696,10 @@ material – please do not share it outside the teaching team.</p>"""
         try:
             self.activity = sa.load_week_activity(df, self.week_start, self.now)
             problems.extend(self.activity["problems"])
+            for sec, (label, src, _) in self.activity.get("class_times", {}).items():
+                if label and label not in self.instructors:
+                    problems.append(f"Section {sec}'s class time “{label}” is not a course_section in "
+                                    f"instructor_mappings.csv — its students are left out of instructor emails")
         except Exception as e:
             self.activity = None
             problems.append(f"Hub activity skipped: {e}")
