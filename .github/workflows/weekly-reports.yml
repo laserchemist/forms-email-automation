@@ -12,6 +12,8 @@
 # Variables (same page -> Variables)
 #   HUB_NAMESPACE                               from hub_weekly_activity.py --list-namespaces
 #   ACTIVITY_SHEET_ID                           Sheet that gets the weekly table
+#   SEND_INSTRUCTORS / SEND_CAS  (optional)     set to false to stop those emails on the
+#                                               Monday schedule; manual runs use the checkboxes
 #
 # Use a PRIVATE repo: these jobs handle student names and activity.
 
@@ -22,6 +24,18 @@ on:
     - cron: "0 11 * * 1"        # Mondays 11:00 UTC = 6-7 AM Eastern
   workflow_dispatch:
     inputs:
+      send_instructors:
+        description: "Send instructor emails"
+        type: boolean
+        default: true
+      send_cas:
+        description: "Send CA emails"
+        type: boolean
+        default: true
+      update_sheet:
+        description: "Update the weekly activity Google Sheet"
+        type: boolean
+        default: true
       test_recipient:
         description: "Send every email to this address instead (leave blank for real run)"
         required: false
@@ -58,10 +72,14 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           ADMIN_EMAIL:    ${{ secrets.ADMIN_EMAIL }}
           TEST_RECIPIENT: ${{ github.event.inputs.test_recipient }}
+          # manual run: the checkboxes; Monday schedule: repo variables (default true)
+          SEND_INSTRUCTORS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.send_instructors) || vars.SEND_INSTRUCTORS || 'true' }}
+          SEND_CAS:         ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.send_cas) || vars.SEND_CAS || 'true' }}
         run: python weekly_instructor_reports.py
 
       - name: Weekly activity Sheet
-        if: always()            # still update the Sheet if an email failed
+        # still runs if an email failed; skipped only when the manual-run box is unticked
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.update_sheet) }}
         env:
           ACTIVITY_SHEET_ID: ${{ vars.ACTIVITY_SHEET_ID }}
         run: python student_activity.py
