@@ -1,0 +1,67 @@
+# .github/workflows/weekly-reports.yml
+# Mondays: (1) weekly instructor / CA / admin emails, now with JupyterHub activity,
+#          (2) rewrite the "Weekly activity" + "Visits to check" tabs of the activity Sheet.
+#
+# Secrets (Settings -> Secrets and variables -> Actions -> Secrets)
+#   EMAIL_USER, EMAIL_PASSWORD, ADMIN_EMAIL     as for the existing reports
+#   GOOGLE_SHEET_ID                             Student Meetings Sheet
+#   GOOGLE_CREDENTIALS_JSON                     forms-reader@... key (Viewer on Meetings,
+#                                               EDITOR on the activity Sheet)
+#   GRAFANA_TOKEN                               Grafana service-account token (glsa_...)
+#   MASTER_ROSTER_CSV                           full contents of master_roster.csv
+# Variables (same page -> Variables)
+#   HUB_NAMESPACE                               from hub_weekly_activity.py --list-namespaces
+#   ACTIVITY_SHEET_ID                           Sheet that gets the weekly table
+#
+# Use a PRIVATE repo: these jobs handle student names and activity.
+
+name: Weekly reports
+
+on:
+  schedule:
+    - cron: "0 11 * * 1"        # Mondays 11:00 UTC = 6-7 AM Eastern
+  workflow_dispatch:
+    inputs:
+      test_recipient:
+        description: "Send every email to this address instead (leave blank for real run)"
+        required: false
+        default: ""
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GOOGLE_SHEET_ID:         ${{ secrets.GOOGLE_SHEET_ID }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+      GRAFANA_TOKEN:           ${{ secrets.GRAFANA_TOKEN }}
+      MASTER_ROSTER_CSV:       ${{ secrets.MASTER_ROSTER_CSV }}
+      HUB_NAMESPACE:           ${{ vars.HUB_NAMESPACE }}
+      SEMESTER_START:          "2026-08-24"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install requests gspread google-auth pandas matplotlib wordcloud
+
+      - name: Weekly emails (instructors, CAs, admin)
+        env:
+          EMAIL_USER:     ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          ADMIN_EMAIL:    ${{ secrets.ADMIN_EMAIL }}
+          TEST_RECIPIENT: ${{ github.event.inputs.test_recipient }}
+        run: python weekly_instructor_reports.py
+
+      - name: Weekly activity Sheet
+        if: always()            # still update the Sheet if an email failed
+        env:
+          ACTIVITY_SHEET_ID: ${{ vars.ACTIVITY_SHEET_ID }}
+        run: python student_activity.py
