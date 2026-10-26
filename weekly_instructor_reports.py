@@ -5,7 +5,8 @@ Weekly meeting reports for EDS (Fall 2026).
 Reads the "Student Meetings" Google Sheet (filled by Microsoft Form -> Power Automate)
 and sends three kinds of email:
 
-  1. Instructors   - their own sections: semester + this week, who students met, charts
+  1. Instructors   - their own sections: semester + this week, who students met, charts,
+                      and (with student_activity.py) JupyterHub hours + office visits per student
   2. Course Assistants (CAs) - class-wide activity, *their own* meetings (week + cumulative),
                       a nudge to record every meeting, and the form QR code
   3. Admin summary - one overview + data-quality warnings (unmapped sections, unknown names)
@@ -20,6 +21,9 @@ Configuration (environment variables)
   SEND_INSTRUCTORS / SEND_CAS    "false" to skip that audience        (default true)
   DRY_RUN                        "true" -> write HTML previews to ./preview, send nothing
   TEST_RECIPIENT                 send every email to this address only (subject shows the real recipient)
+  HUB_ACTIVITY                   "false" to leave out the JupyterHub activity block (default true)
+  GRAFANA_TOKEN, HUB_NAMESPACE,  used by student_activity.py for hub hours / the roster
+  MASTER_ROSTER_CSV
 
 CLI:  python weekly_instructor_reports.py [--dry-run] [--csv local_file.csv]
 
@@ -27,6 +31,7 @@ Config files next to this script:
   instructor_mappings.csv   course_section,instructor_name,email,course_name,active[,notes]
   ca_mappings.csv           form_name,ca_name,email,active[,notes]
   assets/meeting_form_qr.png
+  student_activity.py, hub_weekly_activity.py   (optional: JupyterHub activity block)
 """
 
 import argparse
@@ -52,6 +57,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
+
+try:                                   # JupyterHub hours + matched visits (optional)
+    import student_activity as sa      # noqa: E402
+    SA_IMPORT_ERROR = None
+except Exception as _e:                # module or one of its packages missing
+    sa = None
+    SA_IMPORT_ERROR = str(_e)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("weekly")
@@ -111,6 +123,8 @@ class Reporter:
         self.week_start = self.now - timedelta(days=7)
         self.instructors = self.load_instructors()
         self.cas = self.load_cas()
+        self.activity = None        # student_activity.load_week_activity() result
+        self.hub_csv = None         # per-student activity CSV for the current instructor
 
     # ---- mappings
     def _read_cfg(self, name):
@@ -156,6 +170,16 @@ class Reporter:
         return out
 
     # ---- data
+    @staticmethod
+    def _header_row(vals):
+        """Index of the header row. Usually 0, but sorting the Sheet with the
+        header included (e.g. by Meeting person) moves it into the middle."""
+        for i, row in enumerate(vals):
+            low = [norm(c).lower() for c in row]
+            if "date" in low and any("first" in c and "name" in c for c in low):
+                return i
+        return 0
+
     def load_data(self):
         if self.csv_path:
             raw = pd.read_csv(self.csv_path, dtype=str).fillna("")
@@ -172,7 +196,12 @@ class Reporter:
             vals = ws.get_all_values()
             if len(vals) < 2:
                 return pd.DataFrame()
-            raw = pd.DataFrame(vals[1:], columns=[norm(c) for c in vals[0]])
+            h = self._header_row(vals)
+            if h:
+                log.warning("Header found on sheet row %d, not row 1 (sheet sorted with header?) — handled", h + 1)
+            width = len(vals[h])
+            rows = [list(r) + [""] * (width - len(r)) for i, r in enumerate(vals) if i != h]
+            raw = pd.DataFrame([r[:width] for r in rows], columns=[norm(c) for c in vals[h]])
         raw.columns = [norm(c) for c in raw.columns]
         log.info("Loaded %d raw rows", len(raw))
 
@@ -462,6 +491,14 @@ Automated report &middot; generated {datetime.now(ET).strftime('%b %d, %Y %I:%M 
             for p, n in s["by_person"].items())
         types = ", ".join(f"{escape(str(k))} {v}" for k, v in s["week_by_type"].items()) or "none"
 
+        # JupyterHub hours + matched office visits for these sections' roster students
+        hub_html, self.hub_csv = "", None
+        if sa is not None and self.activity is not None:
+            try:
+                hub_html, self.hub_csv = sa.instructor_block(self, self.activity, sections)
+            except Exception as e:
+                log.error("Hub activity block failed for %s: %s", name, e)
+
         inner = f"""
 <p style="margin-top:0;">Hello {escape(name)}, here is the meeting activity for students in your section(s) of
 <b>{escape(course)}</b> since the semester began, with the past seven days highlighted.</p>
@@ -469,14 +506,15 @@ Automated report &middot; generated {datetime.now(ET).strftime('%b %d, %Y %I:%M 
               (s['total'], 'Meetings this semester', NAVY), (s['students'], 'Students this semester', NAVY)])}
 <h3 style="color:{NAVY};">Your sections</h3>
 {self._table(['Section', 'Semester meetings', 'Semester students', 'This week', 'Students this week'], rows, highlight_cols=(3, 4))}
+{hub_html}
 <h3 style="color:{NAVY};">Who your students met with</h3>
 <ul style="margin:4px 0 12px 18px;padding:0;font-size:13px;">{by_person}</ul>
 <p style="font-size:13px;">This week by type: {types}. Average rating this week: <b>{self._fmt(s['week_rating'])}</b>
 (semester {self._fmt(s['avg_rating'])}, on a 1–5 scale).</p>
 <img src="cid:chart" alt="Charts" style="width:100%;max-width:676px;">
 {"<img src='cid:wordcloud' alt='Topics' style='width:100%;max-width:676px;'>" if self.wordcloud_png else ""}
-<p style="font-size:12px;color:#666;">Attached: this week's meeting list (CSV). Student names are for instructional
-use only – please do not forward.</p>"""
+<p style="font-size:12px;color:#666;">Attached: this week's meeting list (CSV){" and each student's hub hours and office visits (CSV)" if self.hub_csv else ""}.
+Student names are for instructional use only – please do not forward.</p>"""
         return (self._wrap("Weekly Meeting Report", f"{escape(course)} &middot; {self._period()}", inner), s, wk)
 
     # ----------------------------------------------------------------------- CA email
@@ -557,10 +595,25 @@ material – please do not share it outside the teaching team.</p>"""
             ca_rows.append([ca["name"], ca["email"] or "NO EMAIL", int((m["datetime"] >= self.week_start).sum()), len(m)])
         prob = "".join(f"<li>{escape(p)}</li>" for p in problems) or "<li>None 🎉</li>"
         sent_html = "".join(f"<li>{escape(x)}</li>" for x in sent) or "<li>nothing sent</li>"
+
+        hub_html = ""
+        act = self.activity
+        if act is not None and not act["roster"].empty:
+            roster = act["roster"]
+            hub = act["hub"]
+            on_hub = sum(1 for u in roster["user"] if hub and hub.get(u, 0) > 0) if hub is not None else "–"
+            v = act["visits"]
+            matched = int((v["match_quality"] != "none").sum()) if len(v) else 0
+            hub_html = (f"<h3 style='color:{NAVY};'>JupyterHub activity (last 7 days)</h3>"
+                        + self._cards([(len(roster), "Roster students", NAVY),
+                                       (on_hub, "On the hub this week", GREEN),
+                                       (f"{matched}/{len(v)}", "Visits matched to roster", BLUE)]))
+
         inner = f"""
 {self._cards([(s_all['week_total'], 'Meetings this week', GREEN), (s_all['total'], 'Semester meetings', NAVY),
               (s_all['students'], 'Unique students', NAVY), (len(problems), 'Things to fix', ORANGE if problems else GREEN)])}
 <h3 style="color:{NAVY};">Needs attention</h3><ul style="font-size:13px;">{prob}</ul>
+{hub_html}
 <h3 style="color:{NAVY};">Sections</h3>
 {self._table(['Section', 'Instructor', 'Semester', 'This week', 'Students'], sec_rows)}
 <h3 style="color:{NAVY};">CAs</h3>
@@ -623,6 +676,20 @@ material – please do not share it outside the teaching team.</p>"""
         return df[cols].to_csv(index=False).encode("utf-8")
 
     # ----------------------------------------------------------------------- orchestration
+    def load_activity(self, df, problems):
+        """JupyterHub hours + roster-matched visits for the last 7 days (optional)."""
+        if not env_flag("HUB_ACTIVITY", True):
+            return
+        if sa is None:
+            problems.append(f"Hub activity skipped: student_activity.py could not be imported ({SA_IMPORT_ERROR})")
+            return
+        try:
+            self.activity = sa.load_week_activity(df, self.week_start, self.now)
+            problems.extend(self.activity["problems"])
+        except Exception as e:
+            self.activity = None
+            problems.append(f"Hub activity skipped: {e}")
+
     def run(self):
         df = self.load_data()
         if df is None or df.empty:
@@ -634,6 +701,7 @@ material – please do not share it outside the teaching team.</p>"""
 
         s_all = self.summarize(df, self.in_week(df))
         stamp = self.now.strftime("%Y%m%d")
+        self.load_activity(df, problems)
 
         # unmapped sections / unknown people
         for sec in sorted(set(df["section"]) - set(self.instructors)):
@@ -663,10 +731,11 @@ material – please do not share it outside the teaching team.</p>"""
                 imgs = {"chart": chart} if chart else {}
                 if self.wordcloud_png:
                     imgs["wordcloud"] = self.wordcloud_png
+                attach = [(f"meetings_week_{stamp}.csv", self._csv_bytes(wk))] if len(wk) else []
+                if self.hub_csv:
+                    attach.append((f"student_activity_week_{stamp}.csv", self.hub_csv))
                 subj = f"Weekly meeting report – {s['week_total']} this week, {s['total']} this semester"
-                ok = self.send(email, subj, html, imgs,
-                               [(f"meetings_week_{stamp}.csv", self._csv_bytes(wk))] if len(wk) else [],
-                               tag=f"instructor_{slug(g['name'])}")
+                ok = self.send(email, subj, html, imgs, attach, tag=f"instructor_{slug(g['name'])}")
                 sent.append(f"{g['name']} ({'ok' if ok else 'FAILED'})")
                 if not ok:
                     problems.append(f"Email to instructor {g['name']} failed")
