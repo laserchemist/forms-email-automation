@@ -128,28 +128,66 @@ def _name_score(first, last, r_first, r_last):
 
 
 # ── roster ───────────────────────────────────────────────────────────────────
+ROSTER_DIAG = ""   # why the last load_roster() came back empty (no student data)
+
+
+def _read_table(text):
+    """CSV or tab-separated text (pasting from Excel/Sheets gives tabs),
+    tolerating a BOM, Windows line endings, blank lines and surrounding whitespace."""
+    text = text.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return pd.DataFrame()
+    sep = "\t" if lines[0].count("\t") > lines[0].count(",") else ","
+    return pd.read_csv(io.StringIO("\n".join(lines)), dtype=str, sep=sep).fillna("")
+
+
 def load_roster():
     """master_roster.csv -> DataFrame(user, name, section, class_time, _first, _last).
-    Reads MASTER_ROSTER_CSV (contents, e.g. a GitHub secret) if set, else ROSTER_PATH."""
-    text = os.getenv("MASTER_ROSTER_CSV", "").strip()
-    if text:
-        raw = pd.read_csv(io.StringIO(text), dtype=str).fillna("")
+    Reads MASTER_ROSTER_CSV (contents, e.g. a GitHub secret) if set, else ROSTER_PATH.
+    Accepts comma- or tab-separated text; header names are matched case-insensitively."""
+    global ROSTER_DIAG
+    empty = pd.DataFrame(columns=["user", "name", "section", "class_time", "_first", "_last"])
+    text = os.getenv("MASTER_ROSTER_CSV", "")
+    if text.strip():
+        source = "MASTER_ROSTER_CSV"
     else:
         path = Path(os.getenv("ROSTER_PATH") or HERE / "master_roster.csv")
         if not path.exists():
-            return pd.DataFrame(columns=["user", "name", "section", "class_time"])
-        raw = pd.read_csv(path, dtype=str).fillna("")
-    raw.columns = [c.strip() for c in raw.columns]
+            ROSTER_DIAG = "MASTER_ROSTER_CSV is empty and no master_roster.csv file was found"
+            return empty
+        source, text = str(path), path.read_text(encoding="utf-8-sig")
+    try:
+        raw = _read_table(text)
+    except Exception as e:
+        ROSTER_DIAG = f"{source} could not be parsed: {e}"
+        return empty
+    by_lower = {c.strip().lower(): c for c in raw.columns}
 
-    def col(name):
-        return raw[name].astype(str).str.strip() if name in raw.columns else pd.Series("", index=raw.index)
-    login = col("SIS Login ID")
+    def col(*names):
+        for n in names:
+            if n in by_lower:
+                return raw[by_lower[n]].astype(str).str.strip()
+        return pd.Series("", index=raw.index)
+    login = col("sis login id", "login id", "username")
+    if (login == "").all():
+        email = col("email", "e-mail")
+        login = email.str.split("@").str[0]
+    login = login.str.lower()
     df = pd.DataFrame({
-        "user":       login.str.lower() + EMAIL_DOMAIN,
-        "name":       col("Student"),
-        "section":    col("Section").str.replace("Section: ", "", regex=False),
-        "class_time": col("Class Time"),
+        "user":       login + EMAIL_DOMAIN,
+        "name":       col("student", "name", "student name"),
+        "section":    col("section").str.replace("Section: ", "", regex=False),
+        "class_time": col("class time"),
     })[login != ""].drop_duplicates("user").reset_index(drop=True)
+    if df.empty:
+        expected = ["Student", "SIS Login ID", "Section", "Class Time"]
+        present = [e for e in expected if e.lower() in by_lower]
+        ROSTER_DIAG = (f"{source} parsed as {len(raw)} data row(s) x {len(raw.columns)} column(s); "
+                       f"expected header columns found: {present or 'none'} "
+                       f"(the first line must be the header: Student,SIS Login ID,Section,Class Time,Instructor)")
+        return empty
+    ROSTER_DIAG = ""
     split = df["name"].map(_split_roster_name)
     df["_first"], df["_last"] = split.str[0], split.str[1]
     return df
@@ -263,7 +301,7 @@ def load_week_activity(meetings, week_start, now):
     roster = load_roster()
     if roster.empty:
         return {"roster": roster, "visits": pd.DataFrame(), "hub": None,
-                "problems": ["Hub activity skipped: no master roster (set MASTER_ROSTER_CSV or add master_roster.csv)"]}
+                "problems": [f"Hub activity skipped: no master roster ({ROSTER_DIAG})"]}
     no_ct = int((roster["class_time"] == "").sum())
     if no_ct:
         problems.append(f"{no_ct} roster student(s) have no Class Time in master_roster.csv — "
@@ -415,7 +453,7 @@ def main():
 
     roster = load_roster()
     if roster.empty:
-        sys.exit("No master roster — set MASTER_ROSTER_CSV or put master_roster.csv next to this script")
+        sys.exit(f"No master roster: {ROSTER_DIAG}")
     meet = load_meetings(a.meetings_csv)
     visits = match_visits(meet, roster)
     q = visits["match_quality"].value_counts().to_dict()
