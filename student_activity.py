@@ -70,6 +70,64 @@ SECTION_CLASS_TIMES = {
 }
 TEST_STUDENTS = {"student, test", "test student", "test, student"}
 
+# Shown in the email and used for the attached CSV's column names.
+HUB_DEFINITION = ("7-day hub hours = the total time a student's JupyterHub server was running in the "
+                  "last 7 days, sampled every 5 minutes. A server starts when the student opens the hub "
+                  "and is shut down automatically after a period of inactivity, so this measures time "
+                  "with the hub open — engagement, not effort or progress. 0 h means the student did "
+                  "not open the hub at all this week.")
+HUB_BINS   = [0, 1e-9, 2, 4, 6, 8, 10, 15, 20, float("inf")]
+HUB_LABELS = ["0", "0–2", "2–4", "4–6", "6–8", "8–10", "10–15", "15–20", "20+"]
+SECTION_COLORS = ["#2f6db5", "#1aa6a6", "#8e5ac8", "#2e9d5b", "#d1495b", "#6b7280"]
+
+
+def hub_histogram(studs, sections):
+    """PNG: students per 7-day-hub-hours bin, stacked by section; 0 h bar in orange."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from io import BytesIO
+
+    bins = pd.cut(studs["hub_hours"], HUB_BINS, labels=HUB_LABELS, right=True, include_lowest=True)
+    fig, ax = plt.subplots(figsize=(9, 3.9))
+    x = range(len(HUB_LABELS))
+    bottom = pd.Series(0, index=HUB_LABELS)
+    present = [sec for sec in sections if (studs["class_time"] == sec).any()]
+    for i, sec in enumerate(present):
+        c = bins[studs["class_time"] == sec].value_counts().reindex(HUB_LABELS, fill_value=0)
+        colors = ["#e08a1e" if lab == "0" else SECTION_COLORS[i % len(SECTION_COLORS)] for lab in HUB_LABELS]
+        ax.bar(x, c.values, bottom=bottom.values, color=colors, edgecolor="white", linewidth=0.6)
+        bottom = bottom + c
+    for xi, v in zip(x, bottom.values):
+        if v:
+            ax.text(xi, v, int(v), ha="center", va="bottom", fontsize=9)
+    active = studs.loc[studs["hub_hours"] > 0, "hub_hours"]
+    title = f"7-day hub hours — {len(studs)} students"
+    if len(active):
+        title += f" (median {active.median():.1f} h for the {len(active)} who used it)"
+    ax.set_title(title, fontsize=11, fontweight="bold", loc="left", pad=12)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels([f"{lab} h" for lab in HUB_LABELS], fontsize=9)
+    ax.set_ylabel("Students")
+    ax.set_xlabel("Hours with a JupyterHub server running, last 7 days (orange = not on the hub)")
+    from matplotlib.ticker import MaxNLocator
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.set_ylim(0, max(1, int(bottom.max())) * 1.22)
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    from matplotlib.patches import Patch
+    handles = [Patch(color="#e08a1e", label="0 h – not on the hub")]
+    if len(present) > 1:
+        handles += [Patch(color=SECTION_COLORS[i % len(SECTION_COLORS)], label=sec)
+                    for i, sec in enumerate(present)]
+    ax.legend(handles=handles, fontsize=8, frameon=False, loc="upper left", bbox_to_anchor=(1.01, 1))
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return buf.getvalue()
+
 MEET = {"date": "date", "time": "time", "first": "Student First Name",
         "last": "Student Last Name", "section": "Course Section"}
 TEST_NAME = re.compile(r"\btest\b", re.I)
@@ -384,17 +442,18 @@ def load_week_activity(meetings, week_start, now):
             "class_times": class_times}
 
 
-def instructor_block(rep, act, sections):
-    """(html, csv_bytes|None) for one instructor's sections (form class-time labels).
-    `rep` is the Reporter (for its _cards/_table helpers)."""
+def instructor_block(rep, act, sections, csv_name="the attached CSV"):
+    """(html, csv_bytes|None, png_bytes|None) for one instructor's sections (form
+    class-time labels). `rep` is the Reporter (for its _cards/_table helpers).
+    The html references the histogram as cid:hubchart."""
     navy, green, orange, blue = "#1f3a5f", "#2e9d5b", "#e08a1e", "#2f6db5"
     if not act or act["roster"].empty:
-        return "", None
+        return "", None, None
     studs = act["roster"][act["roster"]["class_time"].isin(sections)].copy()
     head = f"<h3 style='color:{navy};'>JupyterHub activity – last 7 days</h3>"
     if studs.empty:
         return (head + "<p style='font-size:13px;color:#666;'>No roster students are linked to these "
-                "sections yet (the master roster's Class Time must match the section names above).</p>"), None
+                "sections yet (the master roster's Class Time must match the section names above).</p>"), None, None
 
     v = act["visits"]
     v = v[v["match_quality"] != "none"] if len(v) else v
@@ -440,14 +499,18 @@ def instructor_block(rep, act, sections):
         quiet_html = (f"<p style='font-size:13px;margin:8px 0 2px;'><b>No hub time and no office visit this "
                       f"week ({len(names)}):</b></p><p style='font-size:13px;margin:0 0 8px;'>{shown}</p>")
 
-    note = ("<p style='font-size:11px;color:#777;'>Hub hours = time the student's JupyterHub server was "
-            "running (it shuts down when idle), so read it as engagement, not effort. Office visits are "
-            "matched to students by name and class time.</p>")
+    png = hub_histogram(studs, sections) if hub is not None else None
+    chart = ("<img src='cid:hubchart' alt='Histogram of 7-day hub hours' "
+             "style='width:100%;max-width:676px;margin:6px 0;'>") if png else ""
+    note = (f"<p style='font-size:12px;color:#555;background:#f6f8fb;border-left:4px solid {blue};"
+            f"padding:8px 10px;margin:8px 0;'><b>What “hub hours” means.</b> {HUB_DEFINITION} "
+            f"Office visits are matched to students by name and class time. Every student's 7-day hub "
+            f"hours and office visits are in <b>{csv_name}</b>, sorted with the least active first.</p>")
     out = studs.sort_values(["hub_hours", "visits", "name"] if hub is not None else ["visits", "name"])
     csv = out[["name", "user", "section", "class_time", "hub_hours", "visits"]].rename(columns={
         "name": "Student", "user": "Email", "section": "Canvas section", "class_time": "Class time",
         "hub_hours": "Hub hours (7 days)", "visits": "Office visits (7 days)"}).to_csv(index=False).encode()
-    return head + cards + table + quiet_html + note, csv
+    return head + cards + chart + table + quiet_html + note, csv, png
 
 
 # ── weekly Sheet ─────────────────────────────────────────────────────────────

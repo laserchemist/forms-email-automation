@@ -125,6 +125,8 @@ class Reporter:
         self.cas = self.load_cas()
         self.activity = None        # student_activity.load_week_activity() result
         self.hub_csv = None         # per-student activity CSV for the current instructor
+        self.hub_png = None         # 7-day hub-hours histogram for the current instructor
+        self.hub_csv_name = f"hub_hours_and_visits_7days_{self.now:%Y%m%d}.csv"
 
     # ---- mappings
     def _read_cfg(self, name):
@@ -492,10 +494,11 @@ Automated report &middot; generated {datetime.now(ET).strftime('%b %d, %Y %I:%M 
         types = ", ".join(f"{escape(str(k))} {v}" for k, v in s["week_by_type"].items()) or "none"
 
         # JupyterHub hours + matched office visits for these sections' roster students
-        hub_html, self.hub_csv = "", None
+        hub_html, self.hub_csv, self.hub_png = "", None, None
         if sa is not None and self.activity is not None:
             try:
-                hub_html, self.hub_csv = sa.instructor_block(self, self.activity, sections)
+                hub_html, self.hub_csv, self.hub_png = sa.instructor_block(
+                    self, self.activity, sections, csv_name=self.hub_csv_name)
             except Exception as e:
                 log.error("Hub activity block failed for %s: %s", name, e)
 
@@ -513,7 +516,7 @@ Automated report &middot; generated {datetime.now(ET).strftime('%b %d, %Y %I:%M 
 (semester {self._fmt(s['avg_rating'])}, on a 1–5 scale).</p>
 <img src="cid:chart" alt="Charts" style="width:100%;max-width:676px;">
 {"<img src='cid:wordcloud' alt='Topics' style='width:100%;max-width:676px;'>" if self.wordcloud_png else ""}
-<p style="font-size:12px;color:#666;">Attached: this week's meeting list (CSV){" and each student's hub hours and office visits (CSV)" if self.hub_csv else ""}.
+<p style="font-size:12px;color:#666;">Attached: this week's meeting list (CSV){f" and <b>{self.hub_csv_name}</b> – each student's 7-day hub hours (time their JupyterHub server was running in the last 7 days) and office visits" if self.hub_csv else ""}.
 Student names are for instructional use only – please do not forward.</p>"""
         return (self._wrap("Weekly Meeting Report", f"{escape(course)} &middot; {self._period()}", inner), s, wk)
 
@@ -728,7 +731,10 @@ material – please do not share it outside the teaching team.</p>"""
                 problems.append(f"Meeting person “{p}” is not in ca_mappings.csv (add them or fix the form)")
 
         # ---- instructors (grouped by email so one person with several sections gets one message)
-        if env_flag("SEND_INSTRUCTORS", True):
+        if not env_flag("SEND_INSTRUCTORS", True):
+            sent.append("Instructor emails turned off for this run (SEND_INSTRUCTORS=false)")
+            log.info("Instructor emails skipped (SEND_INSTRUCTORS=false)")
+        else:
             groups = {}
             for sec, info in self.instructors.items():
                 if not info["email"] and not self.test_to:
@@ -745,9 +751,11 @@ material – please do not share it outside the teaching team.</p>"""
                 imgs = {"chart": chart} if chart else {}
                 if self.wordcloud_png:
                     imgs["wordcloud"] = self.wordcloud_png
+                if self.hub_png:
+                    imgs["hubchart"] = self.hub_png
                 attach = [(f"meetings_week_{stamp}.csv", self._csv_bytes(wk))] if len(wk) else []
                 if self.hub_csv:
-                    attach.append((f"student_activity_week_{stamp}.csv", self.hub_csv))
+                    attach.append((self.hub_csv_name, self.hub_csv))
                 subj = f"Weekly meeting report – {s['week_total']} this week, {s['total']} this semester"
                 ok = self.send(email, subj, html, imgs, attach, tag=f"instructor_{slug(g['name'])}")
                 sent.append(f"{g['name']} ({'ok' if ok else 'FAILED'})")
@@ -755,7 +763,10 @@ material – please do not share it outside the teaching team.</p>"""
                     problems.append(f"Email to instructor {g['name']} failed")
 
         # ---- CAs
-        if env_flag("SEND_CAS", True):
+        if not env_flag("SEND_CAS", True):
+            sent.append("CA emails turned off for this run (SEND_CAS=false)")
+            log.info("CA emails skipped (SEND_CAS=false)")
+        else:
             for key, ca in self.cas.items():
                 if not ca["email"] and not self.test_to:
                     problems.append(f"CA “{ca['name']}” has no email in ca_mappings.csv – skipped")
@@ -778,9 +789,10 @@ material – please do not share it outside the teaching team.</p>"""
         # ---- admin (last, so it can report everything above)
         if self.admin_email:
             html = self.build_admin(df, s_all, sent, problems)
-            self.send(self.admin_email, f"Weekly report summary – {len(sent)} sent, {len(problems)} issue(s)",
+            n_sent = sum(1 for x in sent if "(ok)" in x)
+            self.send(self.admin_email, f"Weekly report summary – {n_sent} sent, {len(problems)} issue(s)",
                       html, tag="admin_summary")
-        log.info("Done. %d emails, %d issues", len(sent), len(problems))
+        log.info("Done. %d emails, %d issues", sum(1 for x in sent if "(ok)" in x or "(FAILED)" in x), len(problems))
         for p in problems:
             log.warning("Issue: %s", p)           # no student names are logged
         return 0
