@@ -35,11 +35,12 @@ jobs:
         env:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          # Data source: repo variable MEETINGS_SOURCE = email | xlsx | sheet  (default: sheet)
+          # Data source: repo variable MEETINGS_SOURCE = json | email | xlsx | sheet  (default: sheet)
           MEETINGS_SOURCE: ${{ vars.MEETINGS_SOURCE || 'sheet' }}
           EXCLUDE_STUDENTS: ${{ vars.EXCLUDE_STUDENTS || 'jonathan|smith,test jon|smith,test jonathan|smith' }}
+          MEETINGS_JSON_URL: ${{ secrets.MEETINGS_JSON_URL }}   # only for MEETINGS_SOURCE=json
           MEETINGS_XLSX_URL: ${{ secrets.MEETINGS_XLSX_URL }}   # only for MEETINGS_SOURCE=xlsx
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}          # fallback only; used when no XLSX URL
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}   # fallback: only used when MEETINGS_SOURCE=sheet
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}               # optional; defaults to EMAIL_USER
           SEMESTER_START: ${{ vars.SEMESTER_START || '2026-08-24' }}
