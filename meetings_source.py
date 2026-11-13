@@ -1,13 +1,14 @@
 """
 Shared loader for the Student Meetings table.
 
-Sources (choose with MEETINGS_SOURCE = email | xlsx | sheet; default: xlsx if a URL is set, else sheet):
+Sources (choose with MEETINGS_SOURCE = json | email | xlsx | sheet; default: json if MEETINGS_JSON_URL is set, else xlsx if a URL is set, else sheet):
+  json   - MEETINGS_JSON_URL: 'Anyone with the link' share of meetings.json that Power Automate rewrites.
   email  - Power Automate emails each submission to the Gmail account in EMAIL_USER (subject MEETING-ROW);
            history/backfill files are emails with a CSV attached (subject MEETING-HISTORY).
            Read over IMAP with EMAIL_USER / EMAIL_PASSWORD (the same Gmail app password used to send).
-  xlsx   - MEETINGS_XLSX_URL  - an OneDrive/SharePoint "Anyone with the link" share of the Excel workbook
-                          that Power Automate appends to (no Google API, no Graph API).
-  2. GOOGLE_SHEET_ID + GOOGLE_CREDENTIALS_JSON - the Google Sheet (legacy / fallback).
+  xlsx   - MEETINGS_XLSX_URL: an OneDrive/SharePoint "Anyone with the link" share of the Excel workbook.
+  sheet  - GOOGLE_SHEET_ID + GOOGLE_CREDENTIALS_JSON: the Google Sheet (legacy / fallback).
+EXCLUDE_STUDENTS='first|last,first|last' drops test rows from any source.
 
 Returns a DataFrame of strings with columns like:
   date, time, Student First Name, Student Last Name, Course Section, Meeting person,
@@ -35,20 +36,50 @@ log = logging.getLogger("meetings_source")
 _ONEDRIVE = re.compile(r"(sharepoint\.com|1drv\.ms|onedrive\.live\.com)", re.I)
 
 
-def _download(url):
+def _get_bytes(url):
+    import http.cookiejar
     if _ONEDRIVE.search(url) and "download=1" not in url:
         url += ("&" if "?" in url else "?") + "download=1"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (meetings-report)"})
+    # SharePoint "Anyone" links redirect through a guest-access page that sets a cookie
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener.addheaders = [("User-Agent", "Mozilla/5.0 (meetings-report)")]
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            data = r.read()
+        with opener.open(url, timeout=90) as r:
+            return r.read()
     except Exception as e:  # do not chain: the traceback must not expose the URL
-        raise RuntimeError(f"Could not download the workbook ({type(e).__name__}: {e}). "
+        raise RuntimeError(f"Could not download the file ({type(e).__name__}: {e}). "
                            "Check the share link is 'Anyone with the link can view'.") from None
+
+
+def _download(url):
+    data = _get_bytes(url)
     if not data.startswith(b"PK"):
         raise RuntimeError("The link did not return an .xlsx file (probably a sign-in page). "
                            "The share must be 'Anyone with the link' and view-only is fine.")
     return data
+
+
+def _fetch_json(url):
+    """meetings.json written by Power Automate: a list of row objects (or {"value": [...]})."""
+    data = _get_bytes(url.strip())
+    try:
+        obj = json.loads(data.decode("utf-8-sig"))
+    except Exception:
+        raise RuntimeError("The link did not return JSON (probably a sign-in page, or the file is empty). "
+                           "The share must be 'Anyone with the link' and view-only is fine.") from None
+    if isinstance(obj, dict):
+        obj = obj.get("value", obj.get("rows", []))
+    if not isinstance(obj, list):
+        raise RuntimeError("meetings.json must be a list of rows")
+    df = pd.DataFrame(obj)
+    if df.empty:
+        return pd.DataFrame(columns=_STD)
+    df = df[[c for c in df.columns if not str(c).startswith(("@", "ItemInternalId"))]]
+    df.columns = [str(c).replace("_x0020_", " ").strip() for c in df.columns]   # tolerate stray spaces in Excel headers
+    if df.columns.duplicated().any():          # same field spelled two ways -> merge, keep non-empty
+        df = df.replace("", pd.NA).T.groupby(level=0, sort=False).first().T.fillna("")
+    log.info("Loaded %d rows from meetings.json", len(df))
+    return _finish(df)
 
 
 def _norm_date(v):
@@ -230,7 +261,12 @@ def _exclude(df):
 
 def fetch_raw(sheet_id=None, creds_json=None, xlsx_url=None):
     source = (os.getenv("MEETINGS_SOURCE") or "").strip().lower()
-    if source == "email":
+    json_url = (os.getenv("MEETINGS_JSON_URL") or "").strip()
+    if source == "json" or (not source and json_url):
+        if not json_url:
+            raise RuntimeError("MEETINGS_SOURCE=json needs the MEETINGS_JSON_URL secret")
+        df = _fetch_json(json_url)
+    elif source == "email":
         df = _from_email(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASSWORD"))
     else:
         df = _fetch_file_or_sheet(sheet_id, creds_json, xlsx_url if source != "sheet" else None)
