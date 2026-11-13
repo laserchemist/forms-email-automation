@@ -3,36 +3,29 @@ name: Daily Forms Report
 
 on:
   schedule:
-    # Run daily at 9:00 AM UTC (adjust for your timezone)
+    # 9:00 UTC = 5:00 AM Eastern (4:00 AM in winter)
     - cron: '0 9 * * *'
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
   send-report:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        
-    - name: Cache pip dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-          
+        cache: 'pip'
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        
+
     - name: Run forms automation
       env:
         DATA_SOURCE: ${{ secrets.DATA_SOURCE }}
@@ -42,16 +35,15 @@ jobs:
         SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
         SMTP_PORT: ${{ secrets.SMTP_PORT }}
         USE_TLS: ${{ secrets.USE_TLS }}
-        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        # Data source: repo variable MEETINGS_SOURCE = json | email | xlsx | sheet  (default: sheet)
+        MEETINGS_SOURCE: ${{ vars.MEETINGS_SOURCE || 'sheet' }}
+        MEETINGS_JSON_URL: ${{ secrets.MEETINGS_JSON_URL }}   # only for MEETINGS_SOURCE=json
+        MEETINGS_XLSX_URL: ${{ secrets.MEETINGS_XLSX_URL }}   # only for MEETINGS_SOURCE=xlsx
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}       # fallback: only used when MEETINGS_SOURCE=sheet
         GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        EXCLUDE_STUDENTS: ${{ vars.EXCLUDE_STUDENTS || 'jonathan|smith,test jon|smith,test jonathan|smith' }}
+        SEMESTER_START: ${{ vars.SEMESTER_START || '2026-08-24' }}
       run: python simple_forms_automation.py
-      
-    - name: Upload artifacts (optional)
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: automation-logs
-        path: |
-          *.log
-          *.png
-          *.csv
+
+    # The old "upload artifacts" step is removed on purpose: *.csv/*.png can contain student
+    # names and artifacts in a public repo are downloadable by anyone.
