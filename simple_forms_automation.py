@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from google.oauth2.service_account import Credentials
+from meetings_source import fetch_raw   # json / email / xlsx / sheet, chosen by MEETINGS_SOURCE
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -76,20 +77,13 @@ class MeetingFormsReporter:
     
     def load_data(self):
         """Load ALL data from Google Sheets with enhanced debugging"""
-        sheet = self.connect_to_sheets()
-        if not sheet:
-            return None
-        
         try:
-            values = sheet.get_all_values()
-            
-            if len(values) < 2:
-                logging.warning("Sheet has no data rows")
+            df = fetch_raw(self.sheet_id, self.credentials_json)
+            if df is None or df.empty:
+                logging.warning("No data rows")
                 return pd.DataFrame()
-            
-            # Create DataFrame
-            df = pd.DataFrame(values[1:], columns=values[0])
-            logging.info(f"📊 Loaded {len(df)} total rows from sheet")
+
+            logging.info(f"📊 Loaded {len(df)} total rows (source: {os.getenv('MEETINGS_SOURCE') or 'auto'})")
             logging.info(f"📋 Columns found: {df.columns.tolist()}")
             
             # Get column names
